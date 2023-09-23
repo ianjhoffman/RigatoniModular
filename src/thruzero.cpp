@@ -43,7 +43,7 @@ struct ThruZero : Module {
 		lightDivider.setDivision(32);
 	}
 
-	float lastCrossingSample = 5.f;
+	float sampledCompThresh = 5.f;
 	bool lastFwd = true;
 	dsp::ClockDivider lightDivider;
 
@@ -53,41 +53,42 @@ struct ThruZero : Module {
 
 		// Calculate CV out and fwd/back
 		float offsetCV = inputs[CV_IN_INPUT].getVoltage() - thresh;
-		bool fwd = offsetCV >= 0.f;
+		bool newFwd = offsetCV >= 0.f;
 		offsetCV = std::fabs(offsetCV);
 		float ledBrightness = std::min(offsetCV * .2f, 1.f);
 		float outCV = offsetCV + thresh;
 
 		// Calculate PM ramp output
-		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (fwd ? 1.f : -1.f);
-		float compThresh = 2.f * std::fabs(lastCrossingSample) - 5.f;
-		float negComp = (scaledRamp > compThresh) ? -10.f : 0.f;
+		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
+		float negComp = (scaledRamp > sampledCompThresh) ? -10.f : 0.f;
 		float posComp = negComp + 10.f;
-		float rampOut = clamp(scaledRamp + crossfade(posComp, negComp, .1f * (compThresh + 5.f)), -5.f, 5.f);
+		float rampOut = clamp(scaledRamp + crossfade(posComp, negComp, .1f * (sampledCompThresh + 5.f)), -5.f, 5.f);
 
 		// Check for FM polarity crossing and change crossing sample
-		if (lastFwd != fwd) {
-			lastCrossingSample = rampOut;
-			DEBUG("Direction went from %s, setting last crossing sample to %.2f (scaledRamp = %.2f, compThresh = %.2f, nextCompThresh = %.2f)", fwd ? "- to +" : "+ to -", rampOut, scaledRamp, compThresh, 2.f * std::fabs(rampOut) - 5.f);
+		if (lastFwd != newFwd) {
+			float crossingSample = rampOut;
+			float unshiftedInvertedSample = -scaledRamp;
+			float shiftAmt = unshiftedInvertedSample - crossingSample;
+			sampledCompThresh = shiftAmt - 5.f;
+			if (sampledCompThresh > 5.f) sampledCompThresh -= 10.f;
+			if (sampledCompThresh < -5.f) sampledCompThresh += 10.f;
 		}
 
 		// Outputs
-		outputs[FWD_OUT_OUTPUT].setVoltage(fwd ? 10.f : 0.f);
+		outputs[FWD_OUT_OUTPUT].setVoltage(newFwd ? 10.f : 0.f);
 		outputs[CV_OUT_OUTPUT].setVoltage(outCV);
 		outputs[RAMP_OUT_OUTPUT].setVoltage(rampOut);
-		outputs[SINE_OUT_OUTPUT].setVoltage(std::sin(2 * float(M_PI) * (.1f * (rampOut + 5.f))));
+		outputs[SINE_OUT_OUTPUT].setVoltage(5.f * std::sin(2 * float(M_PI) * (.1f * (rampOut + 5.f))));
 
 		// Update internal state
-		lastFwd = fwd;
+		lastFwd = newFwd;
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
-			lights[FWD_LED_LIGHT].setBrightnessSmooth(fwd ? ledBrightness : 0.f, lightTime);
-			lights[BACK_LED_LIGHT].setBrightnessSmooth(fwd ? 0.f : ledBrightness, lightTime);
+			lights[FWD_LED_LIGHT].setBrightnessSmooth(newFwd ? ledBrightness : 0.f, lightTime);
+			lights[BACK_LED_LIGHT].setBrightnessSmooth(newFwd ? 0.f : ledBrightness, lightTime);
 		}
 	}
-
-	//float rampPhaseShift(float in, float thresh)
 };
 
 
