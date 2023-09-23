@@ -30,7 +30,7 @@ struct ThruZero : Module {
 	ThruZero() {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
 		configParam(THRESHOLD_KNOB_PARAM, -5.f, 5.f, 0.f, "Thru-zero threshold");
-		configParam(IN_LVL_KNOB_PARAM, -1.f, 1.f, 1.f, "Input ramp level");
+		configParam(IN_LVL_KNOB_PARAM, -2.f, 2.f, 1.f, "Input ramp level");
 		configInput(IN_LVL_IN_INPUT, "Input level CV");
 		configInput(THRESH_IN_INPUT, "Threshold CV");
 		configInput(CV_IN_INPUT, "1V/oct CV input");
@@ -49,7 +49,7 @@ struct ThruZero : Module {
 
 	void process(const ProcessArgs& args) override {
 		float thresh = clamp(params[THRESHOLD_KNOB_PARAM].getValue() + inputs[THRESH_IN_INPUT].getVoltage(), -5.f, 5.0f);
-		float inLvl = clamp(params[IN_LVL_KNOB_PARAM].getValue() + .2f * inputs[IN_LVL_IN_INPUT].getVoltage(), -1.f, 1.f);
+		float inLvl = clamp(params[IN_LVL_KNOB_PARAM].getValue() + .4f * inputs[IN_LVL_IN_INPUT].getVoltage(), -2.f, 2.f);
 
 		// Calculate CV out and fwd/back
 		float offsetCV = inputs[CV_IN_INPUT].getVoltage() - thresh;
@@ -60,6 +60,8 @@ struct ThruZero : Module {
 
 		// Calculate PM ramp output
 		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
+		if (scaledRamp > .5f) scaledRamp -= 10.f;
+		if (scaledRamp < -.5f) scaledRamp += 10.f;
 		float negComp = (scaledRamp > sampledCompThresh) ? -10.f : 0.f;
 		float posComp = negComp + 10.f;
 		float rampOut = clamp(scaledRamp + crossfade(posComp, negComp, .1f * (sampledCompThresh + 5.f)), -5.f, 5.f);
