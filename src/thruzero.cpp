@@ -1,5 +1,22 @@
 #include "plugin.hpp"
 
+struct SpikeProcessor {
+	dsp::RCFilter spikeLPF;
+	dsp::RCFilter spikeIsolatorHPF;
+	float spikeEnvF = 0.f;
+
+	SpikeProcessor() {}
+
+	float process(float sampleRate, float ramp, float derived) {
+		spikeIsolatorHPF.setCutoff(10000 / sampleRate);
+		spikeIsolatorHPF.process(ramp);
+		float hpfRect = std::fabs(spikeIsolatorHPF.highpass());
+		spikeEnvF = (hpfRect >= spikeEnvF) ? (hpfRect * .75f + spikeEnvF * .25f) : spikeEnvF * .25f;
+		spikeLPF.setCutoff(((spikeEnvF >= 2.5f) ? 500 : 20000) / sampleRate);
+		spikeLPF.process(derived);
+		return spikeLPF.lowpass();
+	}
+};
 
 struct ThruZero : Module {
 	enum ParamId {
@@ -43,11 +60,9 @@ struct ThruZero : Module {
 		lightDivider.setDivision(32);
 	}
 
-	dsp::RCFilter spikeLPF;
-	dsp::RCFilter spikeIsolatorHPF;
-	float spikeEnvF = 0.f;
+	SpikeProcessor rampSpikeProcessor;
+	SpikeProcessor sinSpikeProcessor;
 	float sampledCompThresh = 5.f;
-	float lastRampVal = 0.f;
 	bool lastFwd = true;
 	dsp::ClockDivider lightDivider;
 
@@ -64,20 +79,10 @@ struct ThruZero : Module {
 
 		// Calculate PM ramp output
 		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
-		// if (scaledRamp > .5f) scaledRamp -= 10.f;
-		// if (scaledRamp < -.5f) scaledRamp += 10.f;
-		float negComp = (scaledRamp > sampledCompThresh) ? -10.f : 0.f;
-		float posComp = negComp + 10.f;
-		float rampOut = clamp(scaledRamp + crossfade(posComp, negComp, .1f * (sampledCompThresh + 5.f)), -5.f, 5.f);
+		float rampOut = phaseShiftRamp(scaledRamp, sampledCompThresh);
 
 		// Remove spike from phase-shifted ramp
-		spikeIsolatorHPF.setCutoff(10000 / args.sampleRate);
-		spikeIsolatorHPF.process(scaledRamp);
-		float hpfRect = std::fabs(spikeIsolatorHPF.highpass());
-		spikeEnvF = (hpfRect >= spikeEnvF) ? (hpfRect * .8f + spikeEnvF * .2f) : spikeEnvF * .5f;
-		spikeLPF.setCutoff(((spikeEnvF >= 2.5f) ? 500 : 20000) / args.sampleRate);
-		spikeLPF.process(rampOut);
-		rampOut = spikeLPF.lowpass();
+		rampOut = rampSpikeProcessor.process(args.sampleRate, scaledRamp, rampOut);
 
 		// Check for FM polarity crossing and change crossing sample
 		if (lastFwd != newFwd) {
@@ -93,17 +98,26 @@ struct ThruZero : Module {
 		outputs[FWD_OUT_OUTPUT].setVoltage(newFwd ? 10.f : 0.f);
 		outputs[CV_OUT_OUTPUT].setVoltage(outCV);
 		outputs[RAMP_OUT_OUTPUT].setVoltage(rampOut);
-		outputs[SINE_OUT_OUTPUT].setVoltage(5.f * std::sin(2 * float(M_PI) * (.1f * (rampOut + 5.f))));
+
+		float sin = rampOut * 3.f;
+		float absSin = std::fabs(sin);
+		if (absSin > 5.f) sin -= .15f * std::pow(absSin - 5.f, 2.f) * (sin > 0.f ? 1.f : -1.f);
+		outputs[SINE_OUT_OUTPUT].setVoltage(.75f * sinSpikeProcessor.process(args.sampleRate, rampOut, sin));
 
 		// Update internal state
 		lastFwd = newFwd;
-		lastRampVal = scaledRamp;
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
 			lights[FWD_LED_LIGHT].setBrightnessSmooth(newFwd ? ledBrightness : 0.f, lightTime);
 			lights[BACK_LED_LIGHT].setBrightnessSmooth(newFwd ? 0.f : ledBrightness, lightTime);
 		}
+	}
+
+	float phaseShiftRamp(float sample, float thresh) {
+		float negComp = (sample > thresh) ? -10.f : 0.f;
+		float posComp = negComp + 10.f;
+		return clamp(sample + crossfade(posComp, negComp, .1f * (thresh + 5.f)), -5.f, 5.f);
 	}
 };
 
