@@ -43,7 +43,11 @@ struct ThruZero : Module {
 		lightDivider.setDivision(32);
 	}
 
+	dsp::RCFilter spikeLPF;
+	dsp::RCFilter spikeIsolatorHPF;
+	float spikeEnvF = 0.f;
 	float sampledCompThresh = 5.f;
+	float lastRampVal = 0.f;
 	bool lastFwd = true;
 	dsp::ClockDivider lightDivider;
 
@@ -60,11 +64,20 @@ struct ThruZero : Module {
 
 		// Calculate PM ramp output
 		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
-		if (scaledRamp > .5f) scaledRamp -= 10.f;
-		if (scaledRamp < -.5f) scaledRamp += 10.f;
+		// if (scaledRamp > .5f) scaledRamp -= 10.f;
+		// if (scaledRamp < -.5f) scaledRamp += 10.f;
 		float negComp = (scaledRamp > sampledCompThresh) ? -10.f : 0.f;
 		float posComp = negComp + 10.f;
 		float rampOut = clamp(scaledRamp + crossfade(posComp, negComp, .1f * (sampledCompThresh + 5.f)), -5.f, 5.f);
+
+		// Remove spike from phase-shifted ramp
+		spikeIsolatorHPF.setCutoff(10000 / args.sampleRate);
+		spikeIsolatorHPF.process(scaledRamp);
+		float hpfRect = std::fabs(spikeIsolatorHPF.highpass());
+		spikeEnvF = (hpfRect >= spikeEnvF) ? (hpfRect * .8f + spikeEnvF * .2f) : spikeEnvF * .5f;
+		spikeLPF.setCutoff(((spikeEnvF >= 2.5f) ? 500 : 20000) / args.sampleRate);
+		spikeLPF.process(rampOut);
+		// rampOut = spikeLPF.lowpass();
 
 		// Check for FM polarity crossing and change crossing sample
 		if (lastFwd != newFwd) {
@@ -84,6 +97,7 @@ struct ThruZero : Module {
 
 		// Update internal state
 		lastFwd = newFwd;
+		lastRampVal = scaledRamp;
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
