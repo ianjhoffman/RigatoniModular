@@ -77,7 +77,7 @@ struct ThruZero : Module {
 		spikeEnvF = (hpfRect >= spikeEnvF) ? (hpfRect * .8f + spikeEnvF * .2f) : spikeEnvF * .5f;
 		spikeLPF.setCutoff(((spikeEnvF >= 2.5f) ? 500 : 20000) / args.sampleRate);
 		spikeLPF.process(rampOut);
-		// rampOut = spikeLPF.lowpass();
+		rampOut = spikeLPF.lowpass();
 
 		// Check for FM polarity crossing and change crossing sample
 		if (lastFwd != newFwd) {
