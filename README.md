@@ -2,6 +2,8 @@
 
 A 4HP VCV Rack module based off [this ModWiggler topic](https://www.modwiggler.com/forum/viewtopic.php?t=277734) on how to patch up through-zero FM, stemming from the [X Without Y](https://modwiggler.com/forum/viewtopic.php?t=257278) book.
 
+![image of the module in action](./res/README_1.png)
+
 ## Through Zero FM Emulation
 
 Through Zero FM can be emulated (not perfectly, but pretty well) using a VCO that has a soft sync feature. That is, the oscillator core reverses direction when synced rather than dumping its capacitor(s) and resetting to 0.
