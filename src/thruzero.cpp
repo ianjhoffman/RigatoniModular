@@ -73,7 +73,7 @@ struct ThruZero : Module {
 	void process(const ProcessArgs& args) override {
 		float thresh = clamp(params[THRESHOLD_KNOB_PARAM].getValue() + inputs[THRESH_IN_INPUT].getVoltage(), -5.f, 5.0f);
 		float inLvl = clamp(params[IN_LVL_KNOB_PARAM].getValue() + .4f * inputs[IN_LVL_IN_INPUT].getVoltage(), -2.f, 2.f);
-		bool xwyFlavor = params[FLAVOR_SWITCH_PARAM].getValue() > .5f; // TODO - implement
+		bool xwyFlavor = params[FLAVOR_SWITCH_PARAM].getValue() > .5f;
 		bool smoothing = params[SMOOTH_SWITCH_PARAM].getValue() > .5f;
 
 		// Calculate modulator CV output from modulator CV input based on "thru-zero" threshold
@@ -106,6 +106,9 @@ struct ThruZero : Module {
 			if (sampledCompThresh > 5.f) sampledCompThresh -= 10.f;
 			if (sampledCompThresh < -5.f) sampledCompThresh += 10.f;
 		}
+
+		// Do the X Without Y version
+		if (xwyFlavor) rampOut = newFwd ? rampOut : -rampOut;
 
 		// Straightforward outputs
 		outputs[FWD_OUT_OUTPUT].setVoltage(newFwd ? 10.f : 0.f);
