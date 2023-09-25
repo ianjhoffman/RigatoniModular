@@ -1,13 +1,13 @@
 {
   "slug": "ThruZero",
-  "name": "ThruZero",
-  "version": "2.0.0",
-  "license": "proprietary",
-  "brand": "ThruZero",
+  "name": "Thru Zero",
+  "version": "2.1.0",
+  "license": "MIT",
+  "brand": "",
   "author": "Rigatoni Modular",
-  "authorEmail": "",
-  "authorUrl": "",
-  "pluginUrl": "",
+  "authorEmail": "ijh6@cornell.edu",
+  "authorUrl": "https://github.com/ianjhoffman",
+  "pluginUrl": "https://github.com/ianjhoffman/ThruZero",
   "manualUrl": "",
   "sourceUrl": "",
   "donateUrl": "",
@@ -15,9 +15,10 @@
   "modules": [
     {
       "slug": "ThruZero",
-      "name": "ThruZero",
-      "description": "",
-      "tags": []
+      "name": "Thru Zero",
+      "description": "A small waveshaping utility that mimics soft oscillator sync for input ramp waves and acts as a through zero FM helper",
+      "tags": ["Distortion", "Utility", "Waveshaper"],
+      "keywords": "soft sync comparator fm tzfm through zero"
     }
   ]
 }
