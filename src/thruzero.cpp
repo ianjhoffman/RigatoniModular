@@ -144,7 +144,7 @@ struct ThruZero : Module {
 struct ThruZeroWidget : ModuleWidget {
 	ThruZeroWidget(ThruZero* module) {
 		setModule(module);
-		setPanel(createPanel(asset::plugin(pluginInstance, "res/ThruZero.svg")));
+		setPanel(createPanel(asset::plugin(pluginInstance, "res/panels/ThruZero.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(0, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(0, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));

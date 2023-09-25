@@ -1,10 +1,14 @@
-# ThruZero
+# Rigatoni Modular
+
+A collection of VCV Rack modules by Rigatoni Modular.
+
+## ThruZero
 
 A 4HP VCV Rack module based off [this ModWiggler topic](https://www.modwiggler.com/forum/viewtopic.php?t=277734) on how to patch up through-zero FM, stemming from the [X Without Y](https://modwiggler.com/forum/viewtopic.php?t=257278) book.
 
-![image of the module in action](./res/README_1.png)
+![image of the module in action](./res/img/README_1.png)
 
-## Through Zero FM Emulation
+### Through Zero FM Emulation
 
 Through Zero FM can be emulated (not perfectly, but pretty well) using a VCO that has a soft sync feature. That is, the oscillator core reverses direction when synced rather than dumping its capacitor(s) and resetting to 0.
 Often the only VCOs with this feature are triangle-core VCOs; saw-core VCOs are more likely to have hard sync exclusively. When a VCO core is built with through zero FM, the direction of the
@@ -12,7 +16,7 @@ oscillator core reverses when the frequency goes "through zero" – the oscillat
 some of the fundamental shifting effects of "normal" FM in the analog world. Using a comparator, some other scale/offset utilities, and an oscillator with soft sync, one can define an arbitrary level of the modulator signal
 at which the carrier will reverse direction.
 
-## An Explanation of the ThruZero Module's Inner Workings
+### An Explanation of the ThruZero Module's Inner Workings
 
 This module takes as its 2 main inputs:
 - A carrier ramp wave (falling or rising is fine, but there's also a bipolar VCA with up to 2x gain on the input)
