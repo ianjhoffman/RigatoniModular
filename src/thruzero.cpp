@@ -22,6 +22,8 @@ struct ThruZero : Module {
 	enum ParamId {
 		THRESHOLD_KNOB_PARAM,
 		IN_LVL_KNOB_PARAM,
+		SMOOTH_SWITCH_PARAM,
+		FLAVOR_SWITCH_PARAM,
 		PARAMS_LEN
 	};
 	enum InputId {
@@ -48,6 +50,8 @@ struct ThruZero : Module {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
 		configParam(THRESHOLD_KNOB_PARAM, -5.f, 5.f, 0.f, "Thru-zero threshold");
 		configParam(IN_LVL_KNOB_PARAM, -2.f, 2.f, 1.f, "Input ramp level");
+		configSwitch(SMOOTH_SWITCH_PARAM, 0.f, 1.f, 1.f, "Enable spike smoothing", {"Off", "On"});
+		configSwitch(FLAVOR_SWITCH_PARAM, 0.f, 1.f, 0.f, "Enable classic XWY flavor", {"Off", "On"});
 		configInput(IN_LVL_IN_INPUT, "Input level CV");
 		configInput(THRESH_IN_INPUT, "Threshold CV");
 		configInput(CV_IN_INPUT, "1V/oct CV input");
@@ -69,6 +73,8 @@ struct ThruZero : Module {
 	void process(const ProcessArgs& args) override {
 		float thresh = clamp(params[THRESHOLD_KNOB_PARAM].getValue() + inputs[THRESH_IN_INPUT].getVoltage(), -5.f, 5.0f);
 		float inLvl = clamp(params[IN_LVL_KNOB_PARAM].getValue() + .4f * inputs[IN_LVL_IN_INPUT].getVoltage(), -2.f, 2.f);
+		bool xwyFlavor = params[FLAVOR_SWITCH_PARAM].getValue() > .5f; // TODO - implement
+		bool smoothing = params[SMOOTH_SWITCH_PARAM].getValue() > .5f;
 
 		// Calculate modulator CV output from modulator CV input based on "thru-zero" threshold
 		float offsetCV = inputs[CV_IN_INPUT].getVoltage() - thresh;
@@ -83,7 +89,7 @@ struct ThruZero : Module {
 		// flipped if we've done an odd # of "thru-zero" crossings
 		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
 		float rampOut = phaseShiftRamp(scaledRamp, sampledCompThresh);
-		rampOut = rampSpikeProcessor.process(args.sampleRate, scaledRamp, rampOut);
+		if (smoothing) rampOut = rampSpikeProcessor.process(args.sampleRate, scaledRamp, rampOut);
 
 		// Check for FM polarity crossing and change crossing sample
 		if (lastFwd != newFwd) {
@@ -110,7 +116,8 @@ struct ThruZero : Module {
 		float sin = rampOut * 3.f;
 		float absSin = std::fabs(sin);
 		if (absSin > 5.f) sin -= .15f * std::pow(absSin - 5.f, 2.f) * (sin > 0.f ? 1.f : -1.f);
-		outputs[SINE_OUT_OUTPUT].setVoltage(.75f * sinSpikeProcessor.process(args.sampleRate, rampOut, sin));
+		if (smoothing) sin = sinSpikeProcessor.process(args.sampleRate, rampOut, sin);
+		outputs[SINE_OUT_OUTPUT].setVoltage(.75f * sin);
 
 		// Update internal state
 		lastFwd = newFwd;
@@ -131,7 +138,6 @@ struct ThruZero : Module {
 	}
 };
 
-
 struct ThruZeroWidget : ModuleWidget {
 	ThruZeroWidget(ThruZero* module) {
 		setModule(module);
@@ -140,8 +146,10 @@ struct ThruZeroWidget : ModuleWidget {
 		addChild(createWidget<ScrewSilver>(Vec(0, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(0, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-		addParam(createParamCentered<RoundBigBlackKnob>(mm2px(Vec(9.985, 32.445)), module, ThruZero::THRESHOLD_KNOB_PARAM));
-		addParam(createParamCentered<RoundBigBlackKnob>(mm2px(Vec(10.16, 60.304)), module, ThruZero::IN_LVL_KNOB_PARAM));
+		addParam(createParamCentered<RoundBigBlackKnob>(mm2px(Vec(10.16, 40.911)), module, ThruZero::THRESHOLD_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.16, 64.403)), module, ThruZero::IN_LVL_KNOB_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(6.22, 16.121)), module, ThruZero::SMOOTH_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(14.279, 16.121)), module, ThruZero::FLAVOR_SWITCH_PARAM));
 
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(5.058, 81.75)), module, ThruZero::IN_LVL_IN_INPUT));
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(5.058, 91.75)), module, ThruZero::THRESH_IN_INPUT));
@@ -153,8 +161,8 @@ struct ThruZeroWidget : ModuleWidget {
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(14.802, 101.75)), module, ThruZero::SINE_OUT_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(14.802, 111.75)), module, ThruZero::RAMP_OUT_OUTPUT));
 
-		addChild(createLightCentered<MediumLight<GreenLight>>(mm2px(Vec(8.957, 12.194)), module, ThruZero::FWD_LED_LIGHT));
-		addChild(createLightCentered<MediumLight<RedLight>>(mm2px(Vec(8.957, 16.139)), module, ThruZero::BACK_LED_LIGHT));
+		addChild(createLightCentered<MediumLight<GreenLight>>(mm2px(Vec(14.129, 27.780)), module, ThruZero::FWD_LED_LIGHT));
+		addChild(createLightCentered<MediumLight<RedLight>>(mm2px(Vec(6.191, 27.780)), module, ThruZero::BACK_LED_LIGHT));
 	}
 };
 
