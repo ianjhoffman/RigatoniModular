@@ -70,35 +70,43 @@ struct ThruZero : Module {
 		float thresh = clamp(params[THRESHOLD_KNOB_PARAM].getValue() + inputs[THRESH_IN_INPUT].getVoltage(), -5.f, 5.0f);
 		float inLvl = clamp(params[IN_LVL_KNOB_PARAM].getValue() + .4f * inputs[IN_LVL_IN_INPUT].getVoltage(), -2.f, 2.f);
 
-		// Calculate CV out and fwd/back
+		// Calculate modulator CV output from modulator CV input based on "thru-zero" threshold
 		float offsetCV = inputs[CV_IN_INPUT].getVoltage() - thresh;
 		bool newFwd = offsetCV >= 0.f;
 		offsetCV = std::fabs(offsetCV);
-		float ledBrightness = std::min(offsetCV * .2f, 1.f);
 		float outCV = offsetCV + thresh;
 
-		// Calculate PM ramp output
+		// LED display on panel will show whether we're outputting a positive or negative modulation signal
+		float ledBrightness = std::min(offsetCV * .2f, 1.f);
+
+		// Calculate and remove spike from phase-shifted ramp output, which could be
+		// flipped if we've done an odd # of "thru-zero" crossings
 		float scaledRamp = inputs[RAMP_IN_INPUT].getVoltage() * inLvl * (lastFwd ? 1.f : -1.f);
 		float rampOut = phaseShiftRamp(scaledRamp, sampledCompThresh);
-
-		// Remove spike from phase-shifted ramp
 		rampOut = rampSpikeProcessor.process(args.sampleRate, scaledRamp, rampOut);
 
 		// Check for FM polarity crossing and change crossing sample
 		if (lastFwd != newFwd) {
+			// Do some demonic math that essentially finds the right phase shift for the next
+			// inversion of our input ramp. We're sample-and-hold-ing a comparator threshold
+			// here rather than saving a phase shift since the comparator threshold is more
+			// immediate to work with
 			float crossingSample = rampOut;
 			float unshiftedInvertedSample = -scaledRamp;
 			float shiftAmt = unshiftedInvertedSample - crossingSample;
 			sampledCompThresh = shiftAmt - 5.f;
+			// As much as I tried to simplify the algebra above, annoyingly the range still goes
+			// outside of -5V to 5V due to the analytical methods I used, so here's a nice hack
 			if (sampledCompThresh > 5.f) sampledCompThresh -= 10.f;
 			if (sampledCompThresh < -5.f) sampledCompThresh += 10.f;
 		}
 
-		// Outputs
+		// Straightforward outputs
 		outputs[FWD_OUT_OUTPUT].setVoltage(newFwd ? 10.f : 0.f);
 		outputs[CV_OUT_OUTPUT].setVoltage(outCV);
 		outputs[RAMP_OUT_OUTPUT].setVoltage(rampOut);
 
+		// Was too lazy to implement a better saw-to-sin shaper so here's a quadratic approximation
 		float sin = rampOut * 3.f;
 		float absSin = std::fabs(sin);
 		if (absSin > 5.f) sin -= .15f * std::pow(absSin - 5.f, 2.f) * (sin > 0.f ? 1.f : -1.f);
@@ -114,6 +122,8 @@ struct ThruZero : Module {
 		}
 	}
 
+	// My favorite way to patch up a ramp phase shifter on my modular rig,
+	// using some gain, offsets, a comparator, and a crossfader
 	float phaseShiftRamp(float sample, float thresh) {
 		float negComp = (sample > thresh) ? -10.f : 0.f;
 		float posComp = negComp + 10.f;
