@@ -170,4 +170,4 @@ struct ThruZeroWidget : ModuleWidget {
 };
 
 
-Model* modelThruZero = createModel<ThruZero, ThruZeroWidget>("ThruZero");
+Model* modelThruZero = createModel<ThruZero, ThruZeroWidget>("RigatoniModular-ThruZero");
