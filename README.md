@@ -6,6 +6,24 @@ A collection of VCV Rack modules by Rigatoni Modular.
 
 A 4HP VCV Rack module based off [this ModWiggler topic](https://www.modwiggler.com/forum/viewtopic.php?t=277734) on how to patch up through-zero FM, stemming from the [X Without Y](https://modwiggler.com/forum/viewtopic.php?t=257278) book.
 
+### Usage
+
+#### Standard Use (TZFM Emulation)
+
+Patch a ramp wave carrier to the ramp input and adjust the input level to get a non-clipped 10Vpp ramp on the ramp output. Patch an FM modulator to the CV in. For most stable behavior, keep threshold at 12 o'clock. Patch CV out to FM in on your carrier (optionally through an attenuator). For best timbral effects, increase carrier frequency above modulator frequency. The carrier will essentially be soft (reversing) synced to the modulator. 
+
+The main outputs of this module are the ramp and sine outs, which will be the emulated TZFM waveshaped outputs (sine is just the ramp out passed through a quadratic sine shaper and an optional spike removal stage). The `FWD?` output is a comparator output which will be high when the modulator is above the zero threshold and low otherwise. This output can be mixed in with the other outputs to provide a stronger fundamental.
+
+The module has two "flavors", selectable using the switch in the upper right-hand corner of the panel. The default flavor is the "ENJ" flavor, which does reversing sync emulation for a more faithful TZFM sound. An alternative "XWY" (X without Y) flavor is available as well, which simply inverts the input wave when the modulator is below the zero threshold. This mode has a slightly different timbre, since there will be an additional discontinuity when inversion switches if the input waveform isn't at 0V. This mode doesn't require a ramp wave as an input and can act on any waveform.
+
+The default "ENJ" flavor uses a ramp phase shifter, which produces a spike in the phase shifted ramp when the input ramp restarts its cycle. This artifact adds a high-frequency buzz to the timbre of the output. The `SMOOTH` switch turns on a spike-smoothing stage to remove most of this artifact. It also turns on an additional spike-smoothing stage in the sine shaper.
+
+#### As a Comparator
+
+Patch an audio or CV signal into the CV input. The threshold knob acts as the base comparator threshold and the threshold CV input acts as an offset for the threshold. Use the `FWD?` output as the comparator output (0V low, 10V high).
+
+### Demo
+
 ![image of the module in action](./res/img/README_1.png)
 
 ### Through Zero FM Emulation
