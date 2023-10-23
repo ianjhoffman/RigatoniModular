@@ -17,8 +17,18 @@
       "slug": "RigatoniModular-ThruZero",
       "name": "Thru Zero",
       "description": "A small waveshaping utility that mimics soft oscillator sync for input ramp waves and acts as a through zero FM helper",
-      "tags": ["Distortion", "Utility", "Waveshaper"],
+      "tags": [
+        "Distortion",
+        "Utility",
+        "Waveshaper"
+      ],
       "keywords": "soft sync comparator fm tzfm through zero"
+    },
+    {
+      "slug": "RigatoniModular-Loom",
+      "name": "Loom",
+      "description": "",
+      "tags": []
     }
   ]
 }
