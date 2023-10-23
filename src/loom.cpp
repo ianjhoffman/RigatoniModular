@@ -157,10 +157,10 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundHugeBlackKnob>(mm2px(Vec(23.232, 23.652)), module, Loom::COARSE_TUNE_KNOB_PARAM));
 
 		// Regular knobs
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(46.643, 28.875)), module, Loom::HARM_COUNT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(61.994, 28.875)), module, Loom::HARM_DENSITY_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(77.345, 28.875)), module, Loom::HARM_HARM_STRIDE_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(92.695, 28.875)), module, Loom::HARM_SHIFT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(46.643, 27.816)), module, Loom::HARM_COUNT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(61.994, 27.816)), module, Loom::HARM_DENSITY_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(77.345, 27.816)), module, Loom::HARM_HARM_STRIDE_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(92.695, 27.816)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(33.611, 61.274)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(53.975, 61.274)), module, Loom::SPECTRAL_TILT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.34, 61.274)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
@@ -169,10 +169,10 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.34, 81.627)), module, Loom::HARMONIC_INTENSITY_KNOB_PARAM));
 
 		// Trimpots
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(46.643, 44.345)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(61.994, 44.345)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(77.345, 44.345)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.695, 44.345)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(46.643, 44.874)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(61.994, 44.874)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(77.345, 44.874)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.695, 44.874)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.743, 61.724)), module, Loom::HARMONIC_INTENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.743, 81.627)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(7.817, 99.337)), module, Loom::PM_ATTENUVERTER_PARAM));
