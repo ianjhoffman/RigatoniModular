@@ -27,8 +27,13 @@
     {
       "slug": "RigatoniModular-Loom",
       "name": "Loom",
-      "description": "",
-      "tags": []
+      "description": "An additive oscillator based loosely on the structure of Euclidean pattern sequencing",
+      "tags": [
+        "Digital",
+        "Low-frequency oscillator",
+        "Oscillator"
+      ],
+      "keywords": "additive euclidean vco lfo"
     }
   ]
 }
