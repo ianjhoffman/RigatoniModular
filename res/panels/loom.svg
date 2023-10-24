@@ -23,15 +23,15 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
-     inkscape:zoom="4.4411033"
-     inkscape:cx="62.822227"
-     inkscape:cy="148.94947"
+     inkscape:zoom="1.0363931"
+     inkscape:cx="264.37846"
+     inkscape:cy="166.44264"
      inkscape:window-width="1440"
      inkscape:window-height="768"
      inkscape:window-x="0"
      inkscape:window-y="25"
      inkscape:window-maximized="0"
-     inkscape:current-layer="layer2" />
+     inkscape:current-layer="g7" />
   <defs
      id="defs1" />
   <g
@@ -1044,13 +1044,11 @@
       <path
          id="rect5-9-8"
          style="fill:#333333;stroke-width:0.948681;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
-         transform="rotate(90)"
-         d="m 60.756821,-86.856071 h 0.35 v 9 h -0.35 z" />
+         d="m 86.856071,60.570032 v 0.35 h -9 v -0.35 z" />
       <path
          id="rect5-9-8-4"
          style="fill:#333333;stroke-width:0.948681;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
-         transform="rotate(90)"
-         d="m 80.922714,-86.856071 h 0.35 v 9 h -0.35 z" />
+         d="m 86.856071,80.472993 v 0.35 h -9 v -0.35 z" />
       <g
          id="g5-85-4"
          transform="translate(69.503428,-19.400211)"
@@ -1304,42 +1302,6 @@
          inkscape:label="S TILT"
          transform="scale(0.999973,1.000027)"
          aria-label="TILT" />
-      <g
-         id="g14"
-         transform="matrix(0.75,0,0,0.75,1.9765545,14.392507)"
-         style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-dasharray:none;stroke-opacity:1"
-         inkscape:label="H CURVE SWITCH LABEL">
-        <path
-           id="path13"
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 18.729219,57.831187 a 3.7539999,3.7539999 0 0 1 3.754,-3.754" />
-        <path
-           id="path13-0"
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 22.483219,65.77554 a 3.7539999,3.7539999 0 0 1 -3.754,3.754" />
-        <path
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 18.976531,63.433052 3.259377,-3.259376"
-           id="path11-3" />
-      </g>
-      <g
-         id="g14-7"
-         transform="matrix(0.75,0,0,0.75,1.9765545,34.295472)"
-         style="stroke-width:0.533333;stroke-dasharray:none;fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-opacity:1"
-         inkscape:label="S CURVE SWITCH LABEL">
-        <path
-           id="path13-1"
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 18.729219,57.831187 a 3.7539999,3.7539999 0 0 1 3.754,-3.754" />
-        <path
-           id="path13-0-8"
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 22.483219,65.77554 a 3.7539999,3.7539999 0 0 1 -3.754,3.754" />
-        <path
-           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
-           d="m 18.976531,63.433052 3.259377,-3.259376"
-           id="path11-3-5" />
-      </g>
       <g
          id="text8"
          style="font-weight:800;font-size:2.82223px;font-family:Avenir;-inkscape-font-specification:'Avenir Ultra-Bold';text-align:center;letter-spacing:-0.105833px;text-anchor:middle;fill:#333333;stroke-width:0.499999;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
@@ -1668,6 +1630,80 @@
            style="fill:#333333;stroke-width:0.365148;stroke-linecap:square;paint-order:stroke fill markers"
            d="m 45.52224,57.354382 h 0.35 v 2.5 h -0.35 z" />
       </g>
+      <g
+         id="g22"
+         transform="translate(-2.1166667,-0.52916667)">
+        <path
+           id="rect5-2-3-1-6"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 39.294513,61.099199 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="SHAPING KNOB LABEL CONNECTOR LINE" />
+        <path
+           id="rect5-2-3-1-6-2"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 59.495753,61.099199 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="SHAPING KNOB LABEL CONNECTOR LINE" />
+        <path
+           id="rect5-2-3-1-6-0"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 18.790434,61.099199 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="SHAPING KNOB LABEL CONNECTOR LINE" />
+      </g>
+      <g
+         id="g8"
+         transform="translate(-2.1166667,-0.52916667)">
+        <path
+           id="rect5-2-3-1-6-7"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 39.256754,81.00216 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="COMPLEXITY KNOB LABEL CONNECTOR LINE" />
+        <path
+           id="rect5-2-3-1-6-2-8"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 59.457994,81.00216 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="COMPLEXITY KNOB LABEL CONNECTOR LINE" />
+        <path
+           id="rect5-2-3-1-6-0-8"
+           style="fill:#333333;stroke-width:0.961765;stroke-linecap:square;stroke-linejoin:round;paint-order:stroke fill markers"
+           d="m 18.752675,81.00216 h 9.25 v 0.35 h -9.25 z"
+           inkscape:label="COMPLEXITY KNOB LABEL CONNECTOR LINE" />
+      </g>
+      <g
+         id="g14"
+         transform="matrix(0.75000001,0,0,0.75000001,1.9765544,14.392507)"
+         style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-dasharray:none;stroke-opacity:1"
+         inkscape:label="H CURVE SWITCH LABEL">
+        <path
+           id="path13"
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 18.729219,57.831187 a 3.7539999,3.7539999 0 0 1 3.754,-3.754" />
+        <path
+           id="path13-0"
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 22.483219,65.77554 a 3.7539999,3.7539999 0 0 1 -3.754,3.754" />
+        <path
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 18.976531,63.433052 3.259377,-3.259376"
+           id="path11-3" />
+      </g>
+      <g
+         id="g14-7"
+         transform="matrix(0.75000001,0,0,0.75000001,1.9765544,34.295472)"
+         style="stroke-width:0.533333;stroke-dasharray:none;fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-opacity:1"
+         inkscape:label="S CURVE SWITCH LABEL">
+        <path
+           id="path13-1"
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 18.729219,57.831187 a 3.7539999,3.7539999 0 0 1 3.754,-3.754" />
+        <path
+           id="path13-0-8"
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-linecap:square;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 22.483219,65.77554 a 3.7539999,3.7539999 0 0 1 -3.754,3.754" />
+        <path
+           style="fill:none;fill-opacity:1;stroke:#e6e6e6;stroke-width:0.533333;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
+           d="m 18.976531,63.433052 3.259377,-3.259376"
+           id="path11-3-5" />
+      </g>
     </g>
     <g
        id="g31"
@@ -1764,6 +1800,12 @@
        id="text4"
        inkscape:label="FM AMT TEXT"
        aria-label="FM AMT" />
+    <path
+       style="font-weight:800;font-size:2.46944px;font-family:Avenir;-inkscape-font-specification:'Avenir Ultra-Bold';text-align:center;letter-spacing:-0.105833px;word-spacing:0px;text-anchor:middle;fill:#333333;stroke:#e6e6e6;stroke-width:0;stroke-linecap:square;paint-order:stroke fill markers"
+       d="M 18.061016,47.019405 H 19.234 v 0.3556 h -0.787751 v 0.355599 h 0.728485 v 0.355599 h -0.728485 v 0.681566 h -0.385233 z m 1.343725,0 h 0.582788 l 0.402518,1.140882 h 0.0049 l 0.404988,-1.140882 h 0.580319 v 1.748364 H 20.99506 v -1.340906 h -0.0049 l -0.459316,1.340906 h -0.293863 l -0.44203,-1.340906 h -0.0049 v 1.340906 h -0.385232 z m 2.850434,0 h 0.582788 l 0.402519,1.140882 h 0.0049 l 0.404989,-1.140882 h 0.580318 v 1.748364 h -0.385233 v -1.340906 h -0.0049 l -0.459315,1.340906 h -0.293864 l -0.442029,-1.340906 h -0.0049 v 1.340906 h -0.385233 z m 2.131475,0.874182 q 0,-0.209902 0.06914,-0.380294 0.07161,-0.170391 0.197555,-0.288924 0.125941,-0.121003 0.298802,-0.185208 0.172861,-0.06421 0.377824,-0.06421 0.204964,0 0.377825,0.06421 0.172861,0.06421 0.298802,0.185208 0.125941,0.118533 0.195086,0.288924 0.07161,0.170392 0.07161,0.380294 0,0.209903 -0.07161,0.380294 -0.06914,0.170391 -0.195086,0.291394 -0.125941,0.118533 -0.298802,0.182738 -0.172861,0.06421 -0.377825,0.06421 -0.204963,0 -0.377824,-0.06421 -0.172861,-0.06421 -0.298802,-0.182738 -0.125941,-0.121003 -0.197555,-0.291394 -0.06914,-0.170391 -0.06914,-0.380294 z m 0.40005,0 q 0,0.123472 0.03704,0.227189 0.03951,0.101247 0.111125,0.177799 0.07161,0.07408 0.170391,0.116064 0.101247,0.04198 0.224719,0.04198 0.123472,0 0.22225,-0.04198 0.101247,-0.04198 0.172861,-0.116064 0.07161,-0.07655 0.108655,-0.177799 0.03951,-0.103717 0.03951,-0.227189 0,-0.121002 -0.03951,-0.224719 -0.03704,-0.103716 -0.108655,-0.1778 -0.07161,-0.07655 -0.172861,-0.118533 -0.09878,-0.04198 -0.22225,-0.04198 -0.123472,0 -0.224719,0.04198 -0.09878,0.04198 -0.170391,0.118533 -0.07161,0.07408 -0.111125,0.1778 -0.03704,0.103717 -0.03704,0.224719 z m 1.642528,-0.874182 h 0.577849 q 0.209902,0 0.39758,0.04692 0.190146,0.04692 0.330904,0.153105 0.140759,0.103716 0.22225,0.271638 0.08396,0.167922 0.08396,0.407458 0,0.212372 -0.08149,0.375355 -0.07902,0.160513 -0.214842,0.271638 -0.135819,0.108656 -0.313619,0.165453 -0.177799,0.0568 -0.372885,0.0568 h -0.629707 z m 0.385232,1.392765 h 0.200025 q 0.13335,0 0.246944,-0.02716 0.116064,-0.02716 0.200025,-0.0889 0.08396,-0.06421 0.13088,-0.165453 0.04939,-0.103716 0.04939,-0.251883 0,-0.12841 -0.04939,-0.222249 -0.04692,-0.09631 -0.128411,-0.158044 -0.08149,-0.06174 -0.192616,-0.09137 -0.108656,-0.0321 -0.229658,-0.0321 H 26.81446 Z m 1.398053,-1.392765 h 1.187801 v 0.3556 h -0.802568 v 0.325966 h 0.758118 v 0.355599 h -0.758118 v 0.3556 h 0.847018 v 0.355599 h -1.232251 z"
+       id="text2"
+       inkscape:label="FM MODE TEXT"
+       aria-label="FM MODE" />
   </g>
   <g
      inkscape:groupmode="layer"
