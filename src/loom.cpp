@@ -67,6 +67,7 @@ struct Loom : Module {
 		H_LED_3_LIGHT,
 		H_LED_4_LIGHT,
 		H_LED_5_LIGHT,
+		STRIDE_1_LIGHT,
 		LIGHTS_LEN
 	};
 
@@ -215,6 +216,7 @@ struct LoomWidget : ModuleWidget {
 		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(33.684, 12.978)), module, Loom::OSCILLATOR_LED_LIGHT));
 
 		// Single color LEDs
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(69.75, 25.882)), module, Loom::STRIDE_1_LIGHT));
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(82.201, 53.808)), module, Loom::S_LED_1_LIGHT));
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(86.259, 53.808)), module, Loom::S_LED_2_LIGHT));
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(90.317, 53.808)), module, Loom::S_LED_3_LIGHT));
