@@ -1,5 +1,7 @@
 #include "plugin.hpp"
-
+#include <algorithm>
+#include <bit>
+#include <climits>
 
 struct Loom : Module {
 	enum ParamId {
@@ -129,6 +131,71 @@ struct Loom : Module {
 		configOutput(FUNDAMENTAL_OUTPUT, "Fundamental (Sine)");
 		configOutput(ODD_ZERO_DEGREE_OUTPUT, "Odd / 0°");
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
+
+		// Set up everything pre-cached/pre-allocated
+		this->initialize();
+	}
+
+	// All Euclidean pattern bitmaps for each length; inner index is density
+	std::array<std::vector<unsigned long long>, 64> patternTable;
+	std::array<float, 64> harmonicAmplitudes;
+	std::array<float, 64> harmonicMultiples;
+
+	static unsigned long long concatenateBitmaps(unsigned long long a, unsigned long long b) {
+		constexpr auto bitmapSize = sizeof(unsigned long long) * CHAR_BIT;
+		auto shiftAmount = bitmapSize - std::min(bitmapSize - 1, std::countl_zero(b));
+		return (a << shiftAmount) | b;
+	}
+
+	static unsigned long long calculateEuclideanBitmap(int length, int density) {
+		// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
+		if (length == density) return 0xffffffffffffffffull << (64 - length);
+
+		std::vector<unsigned long long> ons(density, 1ull);
+		std::vector<unsigned long long> offs(length - density, 0ull);
+
+		while (offs.size() > 1) {
+			int numCombinations = std::min(ons.size(), offs.size());
+			std::vector<unsigned long long> combined();
+			for (int i = 0; i < numCombinations; i++) {
+				combined.push_back(Loom::concatenateBitmaps(ons[i], offs[i]));
+			}
+
+			if (ons.size() > offs.size()) {
+				// Remaining ons become offs
+				offs = std::vector<unsigned long long>(ons.begin() + offs.size(), ons.end());
+			} else {
+				// Remaining offs stay offs
+				offs = std::vector<unsigned long long>(offs.begin() + ons.size(), offs.end());
+			}
+
+			ons = combined;
+		}
+
+		unsigned long long accum = 0ull;
+		for (onPattern : ons) {
+			accum = Loom::concatenateBitmaps(accum, onPattern);
+		}
+		for (offPattern : offs) {
+			accum = Loom::concatenateBitmaps(accum, offPattern);
+		}
+
+		// Make first step of pattern the most significant bit
+		return accum << (sizeof(unsigned long long) - length);
+	}
+
+	void populatePatternTable() {
+		for (int length = 1; length <= 64; length++) {
+			for (int density = 1; density <= length; density++) {
+				patternTable[length - 1].push_back(Loom::calculateEuclideanBitmap(length, density));
+			}
+		}
+	}
+
+	void initialize() {
+		harmonicAmplitudes.fill(0.f);
+		harmonicMultiples.fill(0.f);
+		this->populatePatternTable();
 	}
 
 	void process(const ProcessArgs& args) override {
