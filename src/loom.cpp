@@ -17,12 +17,12 @@ struct Loom : Module {
 		LIN_EXP_FM_SWITCH_PARAM,
 		HARM_STRIDE_ATTENUVERTER_PARAM,
 		HARM_SHIFT_ATTENUVERTER_PARAM,
-		HARMONIC_CURVE_SWITCH_PARAM,
+		BOOST_FUNDAMENTAL_SWITCH_PARAM,
 		SPECTRAL_PIVOT_KNOB_PARAM,
 		SPECTRAL_TILT_KNOB_PARAM,
 		SPECTRAL_INTENSITY_KNOB_PARAM,
 		HARMONIC_INTENSITY_ATTENUVERTER_PARAM,
-		SPECTRAL_CURVE_SWITCH_PARAM,
+		OUTPUT_MODE_SWITCH_PARAM,
 		HARMONIC_PIVOT_KNOB_PARAM,
 		HARMONIC_TILT_KNOB_PARAM,
 		HARMONIC_INTENSITY_KNOB_PARAM,
@@ -49,10 +49,10 @@ struct Loom : Module {
 		INPUTS_LEN
 	};
 	enum OutputId {
-		SQUARE_OUT_OUTPUT,
-		MAIN_OUT_OUTPUT,
-		SUB_OUT_OUTPUT,
-		QUADRATURE_OUT_OUTPUT,
+		SQUARE_OUTPUT,
+		FUNDAMENTAL_OUTPUT,
+		ODD_ZERO_DEGREE_OUTPUT,
+		EVEN_NINETY_DEGREE_OUTPUT,
 		OUTPUTS_LEN
 	};
 	enum LightId {
@@ -97,16 +97,14 @@ struct Loom : Module {
 		configParam(PM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Phase Modulation CV Attenuverter");
 		configParam(FM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "FM CV Attenuverter");
 
-		// 2-Value Switches
+		// Switches
 		configSwitch(CHARACTER_SWITCH_PARAM, 0.f, 1.f, 0.f, "Harmonic Distribution Character", {"A", "B"});
 		configSwitch(CONTINUOUS_STRIDE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Continuous Harmonic Stride", {"Off", "On"});
 		configSwitch(INTERPOLATION_SWITCH_PARAM, 0.f, 1.f, 1.f, "Harmonic Distribution Interpolation", {"Off", "On"});
 		configSwitch(RANGE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Oscillator Range", {"LFO", "VCO"});
 		configSwitch(LIN_EXP_FM_SWITCH_PARAM, 0.f, 1.f, 0.f, "FM Response", {"Lin", "Exp"});
-
-		// 3-Value Switches
-		configSwitch(HARMONIC_CURVE_SWITCH_PARAM, 0.f, 2.f, 1.f, "Partial Complexity Curve", {"Log", "Lin", "Exp"});
-		configSwitch(SPECTRAL_CURVE_SWITCH_PARAM, 0.f, 2.f, 1.f, "Spectral Shaping Curve", {"Log", "Lin", "Exp"});
+		configSwitch(BOOST_FUNDAMENTAL_SWITCH_PARAM, 0.f, 1.f, 1.f, "Boost Fundamental", {"Off", "On"});
+		configSwitch(OUTPUT_MODE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Output Mode", {"Quadrature", "Odd/Even"});
 
 		// Inputs
 		configInput(HARM_COUNT_CV_INPUT, "Harmonic Count CV");
@@ -125,10 +123,10 @@ struct Loom : Module {
 		configInput(WAVESHAPE_INTENSITY_CV_INPUT, "Partial Complexity Intensity CV");
 
 		// Outputs
-		configOutput(SQUARE_OUT_OUTPUT, "Square");
-		configOutput(MAIN_OUT_OUTPUT, "Main");
-		configOutput(SUB_OUT_OUTPUT, "Sub");
-		configOutput(QUADRATURE_OUT_OUTPUT, "Quadrature");
+		configOutput(SQUARE_OUTPUT, "Square");
+		configOutput(FUNDAMENTAL_OUTPUT, "Fundamental (Sine)");
+		configOutput(ODD_ZERO_DEGREE_OUTPUT, "Odd / 0°");
+		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -162,27 +160,27 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(61.994, 27.816)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(77.345, 27.816)), module, Loom::HARM_HARM_STRIDE_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(92.695, 27.816)), module, Loom::HARM_SHIFT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(33.611, 61.274)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(53.975, 61.274)), module, Loom::SPECTRAL_TILT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.34, 61.274)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(33.611, 81.596)), module, Loom::HARMONIC_PIVOT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(53.975, 81.596)), module, Loom::HARMONIC_TILT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.34, 81.627)), module, Loom::HARMONIC_INTENSITY_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(19.853, 61.274)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(40.217, 61.274)), module, Loom::SPECTRAL_TILT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(60.581, 61.274)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(19.853, 81.596)), module, Loom::HARMONIC_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(40.217, 81.596)), module, Loom::HARMONIC_TILT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(60.581, 81.627)), module, Loom::HARMONIC_INTENSITY_KNOB_PARAM));
 
 		// Trimpots
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(46.643, 44.874)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(61.994, 44.874)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(77.345, 44.874)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.695, 44.874)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.743, 61.724)), module, Loom::HARMONIC_INTENSITY_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(92.743, 81.627)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(78.985, 61.724)), module, Loom::HARMONIC_INTENSITY_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(78.985, 81.627)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(7.817, 99.337)), module, Loom::PM_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(7.817, 42)), module, Loom::FM_ATTENUVERTER_PARAM));
 
 		// Vertical switches
 		addParam(createParamCentered<CKSS>(mm2px(Vec(6.385, 22.916)), module, Loom::RANGE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSThree>(mm2px(Vec(13.822, 61.274)), module, Loom::HARMONIC_CURVE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSThree>(mm2px(Vec(13.822, 81.177)), module, Loom::SPECTRAL_CURVE_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(90.872, 61.274)), module, Loom::BOOST_FUNDAMENTAL_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(90.872, 81.596)), module, Loom::OUTPUT_MODE_SWITCH_PARAM));
 
 		// Horizontal switches
 		addParam(createParamCentered<CKSSHorizontal>(mm2px(Vec(48.192, 16.348)), module, Loom::CHARACTER_SWITCH_PARAM));
@@ -197,36 +195,36 @@ struct LoomWidget : ModuleWidget {
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(56.54, 99.133)), module, Loom::SPECTRAL_PIVOT_CV_INPUT));
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(66.284, 99.133)), module, Loom::SPECTRAL_TILT_CV_INPUT));
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(76.029, 99.133)), module, Loom::SPECTRAL_INTENSITY_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(7.817, 111.779)), module, Loom::PM_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(17.562, 111.779)), module, Loom::FM_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(27.306, 111.779)), module, Loom::PITCH_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(37.051, 111.779)), module, Loom::HARM_DENSITY_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(46.795, 111.779)), module, Loom::HARM_SHIFT_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(56.54, 111.779)), module, Loom::WAVESHAPE_PIVOT_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(66.284, 111.779)), module, Loom::WAVESHAPE_TILT_CV_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(76.029, 111.779)), module, Loom::WAVESHAPE_INTENSITY_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(7.817, 111.249)), module, Loom::PM_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(17.562, 111.249)), module, Loom::FM_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(27.306, 111.249)), module, Loom::PITCH_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(37.051, 111.249)), module, Loom::HARM_DENSITY_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(46.795, 111.249)), module, Loom::HARM_SHIFT_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(56.54, 111.249)), module, Loom::WAVESHAPE_PIVOT_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(66.284, 111.249)), module, Loom::WAVESHAPE_TILT_CV_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(76.029, 111.249)), module, Loom::WAVESHAPE_INTENSITY_CV_INPUT));
 
 		// Outputs
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(85.773, 99.133)), module, Loom::SQUARE_OUT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(95.518, 99.133)), module, Loom::MAIN_OUT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(85.773, 111.779)), module, Loom::SUB_OUT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(95.518, 111.779)), module, Loom::QUADRATURE_OUT_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(85.773, 99.133)), module, Loom::FUNDAMENTAL_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(95.518, 99.133)), module, Loom::ODD_ZERO_DEGREE_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(85.773, 111.249)), module, Loom::SQUARE_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(95.518, 111.249)), module, Loom::EVEN_NINETY_DEGREE_OUTPUT));
 
 		// Multi-colored LEDs
 		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(33.4, 13.3)), module, Loom::OSCILLATOR_LED_LIGHT));
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(69.75, 25.882)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(82.201, 53.808)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(86.259, 53.808)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(90.317, 53.808)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(94.376, 53.808)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(98.434, 53.808)), module, Loom::S_LED_5_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(82.064, 73.834)), module, Loom::H_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(86.122, 73.834)), module, Loom::H_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(90.181, 73.834)), module, Loom::H_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(94.239, 73.834)), module, Loom::H_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(98.297, 73.834)), module, Loom::H_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(66.189, 53.278)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(70.247, 53.278)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(74.306, 53.278)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(78.364, 53.278)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(82.422, 53.278)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(66.189, 73.305)), module, Loom::H_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(70.247, 73.305)), module, Loom::H_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(74.306, 73.305)), module, Loom::H_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(78.364, 73.305)), module, Loom::H_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(82.422, 73.305)), module, Loom::H_LED_5_LIGHT));
 	}
 };
 
