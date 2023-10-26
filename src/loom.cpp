@@ -137,51 +137,58 @@ struct Loom : Module {
 	}
 
 	// All Euclidean pattern bitmaps for each length; inner index is density
-	std::array<std::vector<unsigned long long>, 64> patternTable;
+	std::array<std::vector<uint64_t>, 64> patternTable;
 	std::array<float, 64> harmonicAmplitudes;
 	std::array<float, 64> harmonicMultiples;
 
-	static unsigned long long concatenateBitmaps(unsigned long long a, unsigned long long b) {
-		constexpr auto bitmapSize = sizeof(unsigned long long) * CHAR_BIT;
-		auto shiftAmount = bitmapSize - std::min(bitmapSize - 1, std::countl_zero(b));
+	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
+	static int uint64_log2(uint64_t n) {
+		#define S(k) if (n >= (UINT64_C(1) << k)) { i += k; n >>= k; }
+		int i = -(n == 0); S(32); S(16); S(8); S(4); S(2); S(1); return i;
+		#undef S
+	}
+
+	static uint64_t concatenateBitmaps(uint64_t a, uint64_t b) {
+		auto shiftAmount = (b > 1) ? Loom::uint64_log2(b) + 1 : 1;
 		return (a << shiftAmount) | b;
 	}
 
-	static unsigned long long calculateEuclideanBitmap(int length, int density) {
+	static uint64_t calculateEuclideanBitmap(int length, int density) {
 		// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
-		if (length == density) return 0xffffffffffffffffull << (64 - length);
+		if (length == density) return 0xffffffffffffffff << (64 - length);
 
-		std::vector<unsigned long long> ons(density, 1ull);
-		std::vector<unsigned long long> offs(length - density, 0ull);
-
+		std::vector<uint64_t> ons(density, 1);
+		std::vector<uint64_t> offs(length - density, 0);
 		while (offs.size() > 1) {
 			int numCombinations = std::min(ons.size(), offs.size());
-			std::vector<unsigned long long> combined();
+			std::vector<uint64_t> combined{};
 			for (int i = 0; i < numCombinations; i++) {
 				combined.push_back(Loom::concatenateBitmaps(ons[i], offs[i]));
 			}
 
 			if (ons.size() > offs.size()) {
 				// Remaining ons become offs
-				offs = std::vector<unsigned long long>(ons.begin() + offs.size(), ons.end());
-			} else {
+				offs = std::vector<uint64_t>(ons.begin() + offs.size(), ons.end());
+			} else if (ons.size() < offs.size()) {
 				// Remaining offs stay offs
-				offs = std::vector<unsigned long long>(offs.begin() + ons.size(), offs.end());
+				offs = std::vector<uint64_t>(offs.begin() + ons.size(), offs.end());
+			} else {
+				offs.clear();
 			}
 
 			ons = combined;
 		}
 
-		unsigned long long accum = 0ull;
-		for (onPattern : ons) {
+		uint64_t accum = 0;
+		for (auto &&onPattern : ons) {
 			accum = Loom::concatenateBitmaps(accum, onPattern);
 		}
-		for (offPattern : offs) {
+		for (auto &&offPattern : offs) {
 			accum = Loom::concatenateBitmaps(accum, offPattern);
 		}
 
 		// Make first step of pattern the most significant bit
-		return accum << (sizeof(unsigned long long) - length);
+		return accum << (64 - length);
 	}
 
 	void populatePatternTable() {
