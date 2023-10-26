@@ -85,9 +85,41 @@ struct Loom : Module {
 	Loom() {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
 
+		struct CoarseTuneQuantity : ParamQuantity {
+			float getDisplayValue() override {
+				Loom* module = reinterpret_cast<Loom*>(this->module);
+				if (module->lfoMode) {
+					// 0.003125Hz (320 second cycle) to 25.6Hz
+					displayMultiplier = Loom::LFO_MULTIPLIER;
+				} else {
+					// 1.25Hz to 10.24kHz
+					displayMultiplier = Loom::VCO_MULTIPLIER;
+				}
+				return ParamQuantity::getDisplayValue();
+			}
+		};
+
+		struct FineTuneQuantity : ParamQuantity {
+			float getDisplayValue() override {
+				Loom* module = reinterpret_cast<Loom*>(this->module);
+				if (module->lfoMode) {
+					// .5x to 2x
+					unit = "x";
+					displayBase = 2.f;
+					displayMultiplier = 1.f;
+				} else {
+					// -7 to +7 semitones
+					unit = " Semitones";
+					displayBase = 0.f;
+					displayMultiplier = 7.f;
+				}
+				return ParamQuantity::getDisplayValue();
+			}
+		};
+
 		// Control Knobs
-		configParam(COARSE_TUNE_KNOB_PARAM, 0.f, 1.f, 0.f, "Coarse Tune");
-		configParam(FINE_TUNE_KNOB_PARAM, 0.f, 1.f, 0.f, "Fine Tune");
+		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
+		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
 		configParam(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count");
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
 		configParam(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride");
@@ -108,6 +140,16 @@ struct Loom : Module {
 		configParam(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity CV Attenuverter");
 		configParam(PM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Phase Modulation CV Attenuverter");
 		configParam(FM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "FM CV Attenuverter");
+
+		// Disable attenuverter randomization
+		getParamQuantity(HARM_COUNT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(HARM_DENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(HARM_STRIDE_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(HARM_SHIFT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(HARMONIC_INTENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(PM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(FM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 
 		// Switches
 		configSwitch(CHARACTER_SWITCH_PARAM, 0.f, 1.f, 0.f, "Harmonic Distribution Character", {"A", "B"});
@@ -142,17 +184,23 @@ struct Loom : Module {
 
 		// Set up everything pre-cached/pre-allocated
 		this->populatePatternTable();
-		this->phaseAccum = 0.f;
 	}
 
-	const uint64_t AMP_MASK = 0x8000000000000000;
+	// Having this around makes it easier to calculate partial amplitudes from our bitmasks
+	static constexpr uint64_t AMP_MASK = 0x8000000000000000;
+	static constexpr float LFO_MULTIPLIER = .05f;
+	static constexpr float VCO_MULTIPLIER = 20.f;
+	static constexpr float LIN_FM_FACTOR = 5.f;
+	static constexpr float MAX_FREQ = 10240.f;
 
-	// All Euclidean pattern bitmaps for each length; inner index is density
+	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
 
 	// Synthesis parameters
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
+	dsp::ClockDivider lightDivider;
 	float phaseAccum{0.f};
+	bool lfoMode{false};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int uint64_log2(uint64_t n) {
@@ -161,13 +209,14 @@ struct Loom : Module {
 		#undef S
 	}
 
-	static uint64_t concatenateBitmaps(uint64_t a, uint64_t b) {
+	// Turn patterns into bigger patterns using this one weird trick! CPUs HATE him!
+	static uint64_t concatenateBitmasks(uint64_t a, uint64_t b) {
 		auto shiftAmount = (b > 1) ? Loom::uint64_log2(b) + 1 : 1;
 		return (a << shiftAmount) | b;
 	}
 
-	static uint64_t calculateEuclideanBitmap(int length, int density) {
-		// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
+	// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
+	static uint64_t calculateEuclideanBitmask(int length, int density) {
 		if (length == density) return 0xffffffffffffffff << (64 - length);
 
 		std::vector<uint64_t> ons(density, 1);
@@ -176,7 +225,7 @@ struct Loom : Module {
 			int numCombinations = std::min(ons.size(), offs.size());
 			std::vector<uint64_t> combined{};
 			for (int i = 0; i < numCombinations; i++) {
-				combined.push_back(Loom::concatenateBitmaps(ons[i], offs[i]));
+				combined.push_back(Loom::concatenateBitmasks(ons[i], offs[i]));
 			}
 
 			if (ons.size() > offs.size()) {
@@ -194,10 +243,10 @@ struct Loom : Module {
 
 		uint64_t accum = 0;
 		for (auto &&onPattern : ons) {
-			accum = Loom::concatenateBitmaps(accum, onPattern);
+			accum = Loom::concatenateBitmasks(accum, onPattern);
 		}
 		for (auto &&offPattern : offs) {
-			accum = Loom::concatenateBitmaps(accum, offPattern);
+			accum = Loom::concatenateBitmasks(accum, offPattern);
 		}
 
 		// Make first step of pattern the most significant bit
@@ -207,7 +256,7 @@ struct Loom : Module {
 	void populatePatternTable() {
 		for (int length = 1; length <= 64; length++) {
 			for (int density = 1; density <= length; density++) {
-				patternTable[length - 1].push_back(Loom::calculateEuclideanBitmap(length, density));
+				patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
 			}
 		}
 	}
@@ -264,6 +313,23 @@ struct Loom : Module {
 		return (6.f * normalized) - 2.f;
 	}
 
+	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
+		if (expFm) {
+			coarse += fmCv;
+		}
+
+		float multiplier = lfoMode ? Loom::LFO_MULTIPLIER : Loom::VCO_MULTIPLIER;
+		float fineTuneMultiplier = dsp::exp2_taylor5(fine * (lfoMode ? 1.f : (7.f / 12.f)));
+		float freq = multiplier * fineTuneMultiplier * dsp::exp2_taylor5(coarse + pitchCv);
+
+		if (!expFm) {
+			freq += fmCv * multiplier * Loom::LIN_FM_FACTOR;
+		}
+
+		// Clamp to max frequency, allow negative frequency for thru-zero linear FM
+		return std::min(freq, Loom::MAX_FREQ);
+	}
+
 	void process(const ProcessArgs& args) override {
 		// Read harmonic structure parameters, including attenuverters and CV inputs
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
@@ -294,8 +360,21 @@ struct Loom : Module {
 
 		float out = 0.f;
 
-		// TODO: use coarse, fine, FM in for fundamental frequency
-		float freq = 100.f;
+		// TODO: harmonic complexities array
+		// TODO: phase modulation
+		// TODO: always update all harmonic phase accumulators every sample
+		// TODO: sync all waveforms on changes to continuous stride or VCO/LFO range
+		// TODO: sync stride every fundamental cycle if sync stride switch on or continuous stride off
+
+		// Calculate frequency in Hz
+		lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
+		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage(), -5.f, 5.f);
+		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
+		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
+		float pitchCv = inputs[PITCH_INPUT].getVoltage();
+		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, lfoMode);
+
 		this->phaseAccum = this->phaseAccum + freq * args.sampleTime;
 		this->phaseAccum -= std::floor(this->phaseAccum);
 		for (int i = 0; i < numHarmonics; i++) {
@@ -303,6 +382,8 @@ struct Loom : Module {
 			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
 			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
 		}
+
+		// TODO: find a way to normalize output
 
 		out += this->out1Blep.process();
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * out);
