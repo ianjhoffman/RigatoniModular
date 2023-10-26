@@ -1,7 +1,15 @@
 #include "plugin.hpp"
 #include <algorithm>
-#include <bit>
+#include <cmath>
 #include <climits>
+
+// From VCV Fundamental VCO module
+template <typename T>
+T sin2pi_pade_05_5_4(T x) {
+	x -= 0.5f;
+	return (T(-6.283185307) * x + T(33.19863968) * simd::pow(x, 3) - T(32.44191367) * simd::pow(x, 5))
+	       / (1 + T(1.296008659) * simd::pow(x, 2) + T(0.7028072946) * simd::pow(x, 4));
+}
 
 struct Loom : Module {
 	enum ParamId {
@@ -13,7 +21,7 @@ struct Loom : Module {
 		FINE_TUNE_KNOB_PARAM,
 		HARM_COUNT_KNOB_PARAM,
 		HARM_DENSITY_KNOB_PARAM,
-		HARM_HARM_STRIDE_KNOB_PARAM,
+		HARM_STRIDE_KNOB_PARAM,
 		HARM_SHIFT_KNOB_PARAM,
 		HARM_COUNT_ATTENUVERTER_PARAM,
 		HARM_DENSITY_ATTENUVERTER_PARAM,
@@ -82,7 +90,7 @@ struct Loom : Module {
 		configParam(FINE_TUNE_KNOB_PARAM, 0.f, 1.f, 0.f, "Fine Tune");
 		configParam(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count");
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
-		configParam(HARM_HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride");
+		configParam(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride");
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
 		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
 		configParam(SPECTRAL_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Tilt");
@@ -133,13 +141,18 @@ struct Loom : Module {
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
 
 		// Set up everything pre-cached/pre-allocated
-		this->initialize();
+		this->populatePatternTable();
+		this->phaseAccum = 0.f;
 	}
 
+	const uint64_t AMP_MASK = 0x8000000000000000;
+
 	// All Euclidean pattern bitmaps for each length; inner index is density
-	std::array<std::vector<uint64_t>, 64> patternTable;
-	std::array<float, 64> harmonicAmplitudes;
-	std::array<float, 64> harmonicMultiples;
+	std::array<std::vector<uint64_t>, 64> patternTable{};
+
+	// Synthesis parameters
+	dsp::MinBlepGenerator<16, 16, float> out1Blep;
+	float phaseAccum{0.f};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int uint64_log2(uint64_t n) {
@@ -199,13 +212,100 @@ struct Loom : Module {
 		}
 	}
 
-	void initialize() {
-		harmonicAmplitudes.fill(0.f);
-		harmonicMultiples.fill(0.f);
-		this->populatePatternTable();
+	static uint64_t shiftPattern(uint64_t pattern, int shift, int length) {
+		return (pattern >> shift) | (pattern << (length - shift));
+	}
+
+	int setAmplitudesAndMultiples(
+		std::array<float, 64> &amplitudes,
+		std::array<float, 64> &multiples,
+		float length, // 0-64
+		float density, // 0-1
+		float stride, // 0-4
+		float shift, // 0-1
+		bool continuousStride,
+		bool interpolate
+	) {
+		if (!continuousStride) {
+			stride = std::round(stride);
+		}
+
+		// Simple path
+		if (!interpolate) {
+			int iLength = (int)std::round(length);
+			int iDensity = (int)std::round(density * (iLength - 1));
+			int iShift = (int)std::round(shift * iLength) % iLength;
+
+			auto pattern = Loom::shiftPattern(this->patternTable[iLength - 1][iDensity], iShift, iLength);
+			for (int i = 0; i < iLength; i++) {
+				// TODO: get rid of sawtooth harmonic amplitudes?
+				amplitudes[i] = (pattern & AMP_MASK) ? (1.f / (i + 1)) : 0.f;
+				multiples[i] = 1.f + i * stride;
+				pattern <<= 1;
+			}
+
+			return iLength;
+		}
+
+		// TODO: interpolation
+		return 0;
+	}
+
+	static float scaleLength(float normalized) {
+		if (normalized >= 0.8f) return 32.f * ((5.f * normalized) - 3.f);
+		if (normalized >= 0.6f) return 16.f * ((5.f * normalized) - 2.f);
+		if (normalized >= 0.4f) return 8.f * ((5.f * normalized) - 1.f);
+		if (normalized >= 0.2f) return 20.f * normalized;
+		return 1.f + 15.f * normalized;
+	}
+
+	static float scaleStride(float normalized) {
+		if (normalized <= 0.666666666667) return 3.f * normalized;
+		return (6.f * normalized) - 2.f;
 	}
 
 	void process(const ProcessArgs& args) override {
+		// Read harmonic structure parameters, including attenuverters and CV inputs
+		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
+		length += 0.2f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getVoltage();
+		length = Loom::scaleLength(clamp(length));
+
+		float density = params[HARM_DENSITY_KNOB_PARAM].getValue();
+		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getVoltage();
+		density = clamp(density);
+
+		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
+		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage();
+		stride = Loom::scaleStride(clamp(stride));
+
+		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
+		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
+		shift = clamp(shift);
+
+		// Read harmonic structure switches
+		bool continuousStride = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue() > .5f;
+		bool interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
+
+		std::array<float, 64> harmonicAmplitudes;
+		std::array<float, 64> harmonicMultiples;
+		int numHarmonics = this->setAmplitudesAndMultiples(
+			harmonicAmplitudes, harmonicMultiples, length, density, stride, shift, continuousStride, interpolate
+		);
+
+		float out = 0.f;
+
+		// TODO: use coarse, fine, FM in for fundamental frequency
+		float freq = 100.f;
+		this->phaseAccum = this->phaseAccum + freq * args.sampleTime;
+		this->phaseAccum -= std::floor(this->phaseAccum);
+		for (int i = 0; i < numHarmonics; i++) {
+			float harmonicPhaseAccum = this->phaseAccum * harmonicMultiples[i];
+			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
+			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+		}
+
+		out += this->out1Blep.process();
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * out);
 	}
 };
 
@@ -235,7 +335,7 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(21.115, 40.194)), module, Loom::FINE_TUNE_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(40.823, 27.816)), module, Loom::HARM_COUNT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(57.761, 27.816)), module, Loom::HARM_DENSITY_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.699, 27.816)), module, Loom::HARM_HARM_STRIDE_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(74.699, 27.816)), module, Loom::HARM_STRIDE_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(91.637, 27.816)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(19.853, 61.274)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(40.217, 61.274)), module, Loom::SPECTRAL_TILT_KNOB_PARAM));
