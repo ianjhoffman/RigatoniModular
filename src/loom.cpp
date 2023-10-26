@@ -1,7 +1,9 @@
 #include "plugin.hpp"
+
 #include <algorithm>
-#include <cmath>
 #include <climits>
+#include <cmath>
+#include <utility>
 
 // From VCV Fundamental VCO module
 template <typename T>
@@ -121,12 +123,28 @@ struct Loom : Module {
 			}
 		};
 
+		struct HarmCountQuantity : ParamQuantity {
+			float getDisplayValue() override {
+				Loom* module = reinterpret_cast<Loom*>(this->module);
+				float out = scaleLength(ParamQuantity::getDisplayValue());
+				return module->interpolate ? out : std::round(out);
+			}
+		};
+
+		struct HarmStrideQuantity : ParamQuantity {
+			float getDisplayValue() override {
+				Loom* module = reinterpret_cast<Loom*>(this->module);
+				float out = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue()).first;
+				return module->continuousStride ? out : std::round(out);
+			}
+		};
+
 		// Control Knobs
 		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
-		configParam(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count"); // TODO: custom display
+		configParam<HarmCountQuantity>(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count", " Partials");
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
-		configParam(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride"); // TODO: custom display
+		configParam<HarmStrideQuantity>(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride", "x");
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
 		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
 		configParam(SPECTRAL_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Tilt");
@@ -204,8 +222,12 @@ struct Loom : Module {
 	std::array<float, 64> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
 	dsp::ClockDivider lightDivider;
-	bool lfoMode{false};
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
+
+	// For custom knob displays to read
+	bool lfoMode{false};
+	bool continuousStride{false};
+	bool interpolate{true};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int uint64_log2(uint64_t n) {
@@ -387,10 +409,18 @@ struct Loom : Module {
 		return 1.f + 15.f * normalized;
 	}
 
-	static float scaleStride(float normalized) {
-		// TODO: add plateaus around integer multiples
-		if (normalized <= 0.666666666667) return 3.f * normalized;
-		return (6.f * normalized) - 2.f;
+	static std::pair<float, bool> scaleStrideKnobValue(float knob) {
+		// Scale knob so there are plateaus 1/36 of the knob travel on either side of integer values.
+		// Also, return whether or not the knob is exactly at 1x stride since that's a "home" point
+		if (knob <= 1.f/36.f) return std::make_pair(0.f, false);
+		if (knob <= 11.f/36.f) return std::make_pair(0.9 * knob - 0.025f, false);
+		if (knob <= 13.f/36.f) return std::make_pair(0.25f, true);
+		if (knob <= 23.f/36.f) return std::make_pair(0.9 * knob - 0.075f, false);
+		if (knob <= 25.f/36.f) return std::make_pair(0.5f, false);
+		if (knob <= 29.f/36.f) return std::make_pair(2.25f * knob - 1.0625f, false);
+		if (knob <= 31.f/36.f) return std::make_pair(0.75f, false);
+		if (knob <= 35.f/36.f) return std::make_pair(2.25f * knob - 1.1875f, false);
+		return std::make_pair(1.f, false);
 	}
 
 	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
@@ -420,9 +450,11 @@ struct Loom : Module {
 		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getVoltage();
 		density = clamp(density);
 
-		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
-		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage();
-		stride = Loom::scaleStride(clamp(stride));
+		auto strideScaled = Loom::scaleStrideKnobValue(params[HARM_STRIDE_KNOB_PARAM].getValue());
+		bool strideIsOne = strideScaled.second;
+		float stride = clamp(
+			strideScaled.first + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
+		);
 
 		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
 		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
@@ -433,13 +465,14 @@ struct Loom : Module {
 		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
 			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
 		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
-		bool interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
+		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
+		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
 
 		std::array<float, 64> harmonicAmplitudes;
 		std::array<float, 64> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, length, density, stride, shift,
-			continuousStrideMode != ContinuousStrideMode::OFF, interpolate
+			harmonicAmplitudes, harmonicMultiples, length, density,
+			stride, shift, this->continuousStride, this->interpolate
 		);
 
 		// TODO: phase modulation
@@ -503,9 +536,9 @@ struct Loom : Module {
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
 			float oscLight = (this->phaseAccumulators[0] < .5f) ? 1.f : -1.f;
-			lights[OSCILLATOR_LED_LIGHT + 0].setBrightnessSmooth(oscLight, lightTime);
-			lights[OSCILLATOR_LED_LIGHT + 1].setBrightnessSmooth(-oscLight, lightTime);
-			// TODO: stride LED on when stride near 1
+			lights[OSCILLATOR_LED_LIGHT + 0].setSmoothBrightness(oscLight, lightTime);
+			lights[OSCILLATOR_LED_LIGHT + 1].setSmoothBrightness(-oscLight, lightTime);
+			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
 		}
 
 		this->lastContinuousStrideMode = continuousStrideMode;
