@@ -13,7 +13,6 @@ T sin2pi_pade_05_5_4(T x) {
 
 struct Loom : Module {
 	enum ParamId {
-		CHARACTER_SWITCH_PARAM,
 		CONTINUOUS_STRIDE_SWITCH_PARAM,
 		INTERPOLATION_SWITCH_PARAM,
 		RANGE_SWITCH_PARAM,
@@ -67,7 +66,7 @@ struct Loom : Module {
 		OUTPUTS_LEN
 	};
 	enum LightId {
-		OSCILLATOR_LED_LIGHT,
+		ENUMS(OSCILLATOR_LED_LIGHT, 2),
 		S_LED_1_LIGHT,
 		S_LED_2_LIGHT,
 		S_LED_3_LIGHT,
@@ -152,8 +151,7 @@ struct Loom : Module {
 		getParamQuantity(FM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 
 		// Switches
-		configSwitch(CHARACTER_SWITCH_PARAM, 0.f, 1.f, 0.f, "Harmonic Distribution Character", {"A", "B"});
-		configSwitch(CONTINUOUS_STRIDE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Continuous Harmonic Stride", {"Off", "On"});
+		configSwitch(CONTINUOUS_STRIDE_SWITCH_PARAM, 0.f, 2.f, 0.f, "Continuous Harmonic Stride", {"Off", "Sync", "Free"});
 		configSwitch(INTERPOLATION_SWITCH_PARAM, 0.f, 1.f, 1.f, "Harmonic Distribution Interpolation", {"Off", "On"});
 		configSwitch(RANGE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Oscillator Range", {"LFO", "VCO"});
 		configSwitch(LIN_EXP_FM_SWITCH_PARAM, 0.f, 1.f, 0.f, "FM Response", {"Lin", "Exp"});
@@ -387,6 +385,13 @@ struct Loom : Module {
 
 		out += this->out1Blep.process();
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * out);
+
+		if (lightDivider.process()) {
+			float lightTime = args.sampleTime * lightDivider.getDivision();
+			float oscLight = this->phaseAccum < .5f ? 1.f : -1.f;
+			lights[OSCILLATOR_LED_LIGHT + 0].setBrightnessSmooth(oscLight, lightTime);
+			lights[OSCILLATOR_LED_LIGHT + 1].setBrightnessSmooth(-oscLight, lightTime);
+		}
 	}
 };
 
@@ -442,9 +447,8 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<CKSS>(mm2px(Vec(5.856, 40.194)), module, Loom::LIN_EXP_FM_SWITCH_PARAM));
 
 		// Horizontal switches
-		addParam(createParamCentered<CKSSHorizontal>(mm2px(Vec(42.9, 15.819)), module, Loom::CHARACTER_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSHorizontal>(mm2px(Vec(66.494, 15.819)), module, Loom::CONTINUOUS_STRIDE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSHorizontal>(mm2px(Vec(90.088, 15.819)), module, Loom::INTERPOLATION_SWITCH_PARAM));
+		addParam(createParamCentered<CKSSHorizontal>(mm2px(Vec(57.809, 15.59)), module, Loom::INTERPOLATION_SWITCH_PARAM));
+		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(86.074, 15.59)), module, Loom::CONTINUOUS_STRIDE_SWITCH_PARAM));
 
 		// Inputs
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(27.306, 99.133)), module, Loom::SYNC_INPUT));
