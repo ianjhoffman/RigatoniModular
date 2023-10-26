@@ -370,23 +370,31 @@ struct Loom : Module {
 			continuousStrideMode != ContinuousStrideMode::OFF, interpolate
 		);
 
-		// TODO: harmonic complexities array
 		// TODO: phase modulation
-		// TODO: sync all waveforms on changes to continuous stride or VCO/LFO range
 
 		// Calculate frequency in Hz
-		lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		bool lfoModeChanged = newLfoMode != this->lfoMode;
+		this->lfoMode = newLfoMode;
 		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
 		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage(), -5.f, 5.f);
 		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
 		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
-		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, lfoMode);
+		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
+
+		// TODO: calculate sync
+		bool sync = false;
 		
 		float phaseInc = freq * args.sampleTime;
 		float out = 0.f;
 		for (int i = 0; i < 64; i++) {
-			float harmonicPhaseAccum = continuousStrideModeChanged ? 0.f : this->phaseAccumulators[i];
+			float harmonicPhaseAccum = this->phaseAccumulators[i];
+			if (continuousStrideModeChanged || lfoModeChanged || sync) {
+				harmonicPhaseAccum = 0.f;
+				// TODO: insert discontinuity into minblep
+			}
+
 			if (continuousStrideMode == ContinuousStrideMode::SYNC && i > 0) {
 				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
 			} else {
@@ -398,6 +406,8 @@ struct Loom : Module {
 
 			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
 			if (overNyquist || i >= numHarmonics) continue;
+
+			// TODO: harmonic complexities
 			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
 		}
 
