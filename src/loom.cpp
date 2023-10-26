@@ -144,7 +144,7 @@ struct Loom : Module {
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
 		configParam<HarmCountQuantity>(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count", " Partials");
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
-		configParam<HarmStrideQuantity>(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride", "x");
+		configParam<HarmStrideQuantity>(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 1.f/3.f, "Harmonic Stride", "x");
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
 		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
 		configParam(SPECTRAL_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Tilt");
@@ -299,13 +299,8 @@ struct Loom : Module {
 		float density, // 0-1
 		float stride, // 0-4
 		float shift, // 0-1
-		bool continuousStride,
 		bool interpolate
 	) {
-		if (!continuousStride) {
-			stride = std::round(stride);
-		}
-
 		// Always calculate all frequency multiples
 		for (int i = 0; i < 64; i++) {
 			multiples[i] = 1.f + i * stride;
@@ -441,6 +436,14 @@ struct Loom : Module {
 	}
 
 	void process(const ProcessArgs& args) override {
+		// Read harmonic structure switches
+		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
+		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
+			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
+		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
+		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
+		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
+
 		// Read harmonic structure parameters, including attenuverters and CV inputs
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
 		length += 0.2f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getVoltage();
@@ -452,32 +455,27 @@ struct Loom : Module {
 
 		auto strideScaled = Loom::scaleStrideKnobValue(params[HARM_STRIDE_KNOB_PARAM].getValue());
 		bool strideIsOne = strideScaled.second;
-		float stride = clamp(
+		float stride = 4.f * clamp(
 			strideScaled.first + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
 		);
+		if (!this->continuousStride) {
+			stride = std::round(stride);
+			if (std::abs(stride - 1.f) < .1f) strideIsOne = true;
+		}
 
 		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
 		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
 		shift = clamp(shift);
 
-		// Read harmonic structure switches
-		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
-		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
-			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
-		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
-		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
-		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
-
+		// Actually do partial amplitude/frequency calculations
 		std::array<float, 64> harmonicAmplitudes;
 		std::array<float, 64> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, length, density,
-			stride, shift, this->continuousStride, this->interpolate
+			harmonicAmplitudes, harmonicMultiples, length,
+			density, stride, shift, this->interpolate
 		);
 
-		// TODO: phase modulation
-
-		// Calculate frequency in Hz
+		// Calculate fundamental frequency in Hz
 		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
 		bool lfoModeChanged = newLfoMode != this->lfoMode;
 		this->lfoMode = newLfoMode;
@@ -490,6 +488,8 @@ struct Loom : Module {
 
 		// TODO: calculate sync
 		bool sync = false;
+
+		// TODO: phase modulation
 		
 		float phaseInc = freq * args.sampleTime;
 		float oddZeroOut = 0.f;
@@ -520,7 +520,7 @@ struct Loom : Module {
 			// TODO: even/odd splitting & cosine
 			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
 			if (i == 0) {
-				fundOut = oddZeroOut; // why doesn't it work?
+				fundOut = oddZeroOut;
 				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
 				// TODO: insert discontinuity into minblep for square
 			}
