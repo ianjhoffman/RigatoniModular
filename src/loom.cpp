@@ -389,7 +389,10 @@ struct Loom : Module {
 		bool sync = false;
 		
 		float phaseInc = freq * args.sampleTime;
-		float out = 0.f;
+		float oddZeroOut = 0.f;
+		// TODO: even/90 degree output
+		float fundOut = 0.f;
+		float squareOut = 0.f;
 		for (int i = 0; i < 64; i++) {
 			float harmonicPhaseAccum = this->phaseAccumulators[i];
 			if (continuousStrideModeChanged || lfoModeChanged || sync) {
@@ -409,21 +412,30 @@ struct Loom : Module {
 			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
 			if (overNyquist || i >= numHarmonics) continue;
 
-			// TODO: harmonic complexities
-			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+			// TODO: harmonic complexities & amplitude shaping
+			// TODO: fundamental boosting
+			// TODO: even/odd splitting & cosine
+			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+			if (i == 0) {
+				fundOut = oddZeroOut; // why doesn't it work?
+				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
+				// TODO: insert discontinuity into minblep for square
+			}
 		}
 
-		// TODO: find a way to normalize output
+		// TODO: find a way to normalize amplitude of main 2 outputs
 
-		out += this->out1Blep.process();
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * out);
+		oddZeroOut += this->out1Blep.process();
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * oddZeroOut);
+		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * fundOut);
+		outputs[SQUARE_OUTPUT].setVoltage(5.f * squareOut);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
-			float oscLight = this->phaseAccumulators[0] < .5f ? 1.f : -1.f;
+			float oscLight = (this->phaseAccumulators[0] < .5f) ? 1.f : -1.f;
 			lights[OSCILLATOR_LED_LIGHT + 0].setBrightnessSmooth(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT + 1].setBrightnessSmooth(-oscLight, lightTime);
-			// TODO: stride LED
+			// TODO: stride LED on when stride near 1
 		}
 
 		this->lastContinuousStrideMode = continuousStrideMode;
