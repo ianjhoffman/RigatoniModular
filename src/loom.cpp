@@ -395,7 +395,10 @@ struct Loom : Module {
 
 			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
 			this->phaseAccumulators[i] = harmonicPhaseAccum;
-			out += (i >= numHarmonics) ? 0.f : harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+
+			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
+			if (overNyquist || i >= numHarmonics) continue;
+			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
 		}
 
 		// TODO: find a way to normalize output
