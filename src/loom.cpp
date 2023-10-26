@@ -124,9 +124,9 @@ struct Loom : Module {
 		// Control Knobs
 		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
-		configParam(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count");
+		configParam(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count"); // TODO: custom display
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
-		configParam(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride");
+		configParam(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Stride"); // TODO: custom display
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
 		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
 		configParam(SPECTRAL_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Tilt");
@@ -284,6 +284,7 @@ struct Loom : Module {
 			stride = std::round(stride);
 		}
 
+		// Always calculate all frequency multiples
 		for (int i = 0; i < 64; i++) {
 			multiples[i] = 1.f + i * stride;
 		}
@@ -317,6 +318,7 @@ struct Loom : Module {
 	}
 
 	static float scaleStride(float normalized) {
+		// TODO: add plateaus around integer multiples
 		if (normalized <= 0.666666666667) return 3.f * normalized;
 		return (6.f * normalized) - 2.f;
 	}
@@ -421,6 +423,7 @@ struct Loom : Module {
 			float oscLight = this->phaseAccumulators[0] < .5f ? 1.f : -1.f;
 			lights[OSCILLATOR_LED_LIGHT + 0].setBrightnessSmooth(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT + 1].setBrightnessSmooth(-oscLight, lightTime);
+			// TODO: stride LED
 		}
 
 		this->lastContinuousStrideMode = continuousStrideMode;
