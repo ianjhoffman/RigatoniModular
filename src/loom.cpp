@@ -80,6 +80,11 @@ struct Loom : Module {
 		STRIDE_1_LIGHT,
 		LIGHTS_LEN
 	};
+	enum ContinuousStrideMode {
+		OFF,
+		SYNC,
+		FREE
+	};
 
 	Loom() {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
@@ -182,6 +187,7 @@ struct Loom : Module {
 
 		// Set up everything pre-cached/pre-allocated
 		this->populatePatternTable();
+		this->phaseAccumulators.fill(0.f);
 	}
 
 	// Having this around makes it easier to calculate partial amplitudes from our bitmasks
@@ -195,10 +201,11 @@ struct Loom : Module {
 	std::array<std::vector<uint64_t>, 64> patternTable{};
 
 	// Synthesis parameters
+	std::array<float, 64> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
 	dsp::ClockDivider lightDivider;
-	float phaseAccum{0.f};
 	bool lfoMode{false};
+	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int uint64_log2(uint64_t n) {
@@ -277,6 +284,10 @@ struct Loom : Module {
 			stride = std::round(stride);
 		}
 
+		for (int i = 0; i < 64; i++) {
+			multiples[i] = 1.f + i * stride;
+		}
+
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
@@ -287,7 +298,6 @@ struct Loom : Module {
 			for (int i = 0; i < iLength; i++) {
 				// TODO: get rid of sawtooth harmonic amplitudes?
 				amplitudes[i] = (pattern & AMP_MASK) ? (1.f / (i + 1)) : 0.f;
-				multiples[i] = 1.f + i * stride;
 				pattern <<= 1;
 			}
 
@@ -347,22 +357,22 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Read harmonic structure switches
-		bool continuousStride = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue() > .5f;
+		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
+		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
+			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
+		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
 		bool interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
 
 		std::array<float, 64> harmonicAmplitudes;
 		std::array<float, 64> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, length, density, stride, shift, continuousStride, interpolate
+			harmonicAmplitudes, harmonicMultiples, length, density, stride, shift,
+			continuousStrideMode != ContinuousStrideMode::OFF, interpolate
 		);
-
-		float out = 0.f;
 
 		// TODO: harmonic complexities array
 		// TODO: phase modulation
-		// TODO: always update all harmonic phase accumulators every sample
 		// TODO: sync all waveforms on changes to continuous stride or VCO/LFO range
-		// TODO: sync stride every fundamental cycle if sync stride switch on or continuous stride off
 
 		// Calculate frequency in Hz
 		lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
@@ -372,13 +382,20 @@ struct Loom : Module {
 		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
 		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, lfoMode);
+		
+		float phaseInc = freq * args.sampleTime;
+		float out = 0.f;
+		for (int i = 0; i < 64; i++) {
+			float harmonicPhaseAccum = continuousStrideModeChanged ? 0.f : this->phaseAccumulators[i];
+			if (continuousStrideMode == ContinuousStrideMode::SYNC && i > 0) {
+				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
+			} else {
+				harmonicPhaseAccum += phaseInc * harmonicMultiples[i];
+			}
 
-		this->phaseAccum = this->phaseAccum + freq * args.sampleTime;
-		this->phaseAccum -= std::floor(this->phaseAccum);
-		for (int i = 0; i < numHarmonics; i++) {
-			float harmonicPhaseAccum = this->phaseAccum * harmonicMultiples[i];
 			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
-			out += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+			this->phaseAccumulators[i] = harmonicPhaseAccum;
+			out += (i >= numHarmonics) ? 0.f : harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
 		}
 
 		// TODO: find a way to normalize output
@@ -388,10 +405,12 @@ struct Loom : Module {
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
-			float oscLight = this->phaseAccum < .5f ? 1.f : -1.f;
+			float oscLight = this->phaseAccumulators[0] < .5f ? 1.f : -1.f;
 			lights[OSCILLATOR_LED_LIGHT + 0].setBrightnessSmooth(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT + 1].setBrightnessSmooth(-oscLight, lightTime);
 		}
+
+		this->lastContinuousStrideMode = continuousStrideMode;
 	}
 };
 
