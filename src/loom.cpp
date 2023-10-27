@@ -411,18 +411,18 @@ struct Loom : Module {
 
 	static void shapeAmplitudes(
 		std::array<float, 128> &amplitudes,
-		int numHarmonics,
+		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
 		float intensity
 	) {
-		float pivotHarm = pivot * (numHarmonics - 1);
+		float pivotHarm = pivot * (length - 1);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float slopeMultiplier = (intensity > 0.5f) ? (32.f * intensity - 15.f) : 1.f;
 		intensity = clamp(intensity * 2.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
-		for (int i = 0; i < numHarmonics; i++) {
+		for (int i = 0; i < std::ceil(length); i++) {
 			float diff = pivotHarm - (float)i;
 			float amp = amplitudes[i] * (std::get<2>(slopes) + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
 			amp = clamp(amp, 0.f, 2.f); // No negative amplitudes
@@ -462,7 +462,12 @@ struct Loom : Module {
 	}
 
 	static float drive(float in, float drive) {
-		return (drive < 1.f) ? (in * drive) : in;
+		if (drive < 1.f) return in * drive;
+		in *= .4f + drive * .6f; // Don't hit the folder as hard
+		float overThresh = std::abs(in) - .8f;
+		if (overThresh < 0.f) return in;
+		float subAmt = clamp(dsp::exp2_taylor5(1.f + .5f * overThresh * (drive - 1.f)) - 2.f, 0.f, overThresh * 1.25f);
+		return (in < 0.f) ? (in + subAmt) : (in - subAmt);
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -509,7 +514,7 @@ struct Loom : Module {
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
-		Loom::shapeAmplitudes(harmonicAmplitudes, numHarmonics, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
