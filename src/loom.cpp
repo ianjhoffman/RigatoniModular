@@ -309,38 +309,44 @@ struct Loom : Module {
 			return iLength;
 		}
 
-		// TODO - interpolation support for 128 partials
-		amplitudes[0] = 1.f;
-		return 1;
-
 		// Interpolation is a lot more complicated but we're essentially finding a point somewhere in the 3D pattern space
 		// Length is the "outer" variable in our 2x2x2 fade since it affects the scaling of density and shift
 		int iLengthLow = (int)std::floor(length);
-		int iLengthHigh = (iLengthLow == 64) ? 64 : iLengthLow + 1;
+		int iLengthLowClamped = std::min(iLengthLow, 64);
+		int iLengthHigh = std::min(iLengthLow + 1, 128);
+		int iLengthHighClamped = std::min(iLengthHigh, 64);
 		float lengthFade = length - iLengthLow;
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
 		{
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthHigh - 1);
+			float fDensity = density * (iLengthHighClamped - 1);
 			int iDensityLow = (int)std::floor(fDensity);
 			int iDensityHigh = iDensityLow + 1;
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthHigh - 1);
+			float fShift = shift * (iLengthHighClamped - 1);
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
 			// Get 4 patterns
-			auto lowLow = Loom::shiftPattern(this->patternTable[iLengthHigh - 1][iDensityLow], iShiftLow, iLengthHigh);
-			auto lowHigh = Loom::shiftPattern(this->patternTable[iLengthHigh - 1][iDensityHigh], iShiftLow, iLengthHigh);
-			auto highLow = Loom::shiftPattern(this->patternTable[iLengthHigh - 1][iDensityLow], iShiftHigh, iLengthHigh);
-			auto highHigh = Loom::shiftPattern(this->patternTable[iLengthHigh - 1][iDensityHigh], iShiftHigh, iLengthHigh);
+			uint64_t lowLow, lowLowCached, lowHigh, lowHighCached, highLow, highLowCached, highHigh, highHighCached;
+			lowLow = lowLowCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityLow], iShiftLow, iLengthHighClamped);
+			lowHigh = lowHighCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityHigh], iShiftLow, iLengthHighClamped);
+			highLow = highLowCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityLow], iShiftHigh, iLengthHighClamped);
+			highHigh = highHighCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityHigh], iShiftHigh, iLengthHighClamped);
 
 			// Do blending
 			for (int i = 0; i < iLengthHigh; i++) {
+				if (i == 64) {
+					lowLow = lowLowCached;
+					lowHigh = lowHighCached;
+					highLow = highLowCached;
+					highHigh = highHighCached;
+				}
+
 				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
 				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
 				amplitudes[i] = (1.f / (i + 1)) * lengthFade * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
@@ -355,25 +361,33 @@ struct Loom : Module {
 		// Do low length
 		{
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthLow - 1);
+			float fDensity = density * (iLengthLowClamped - 1);
 			int iDensityLow = (int)std::floor(fDensity);
 			int iDensityHigh = iDensityLow + 1;
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthLow - 1);
+			float fShift = shift * (iLengthLowClamped - 1);
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
 			// Get 4 patterns
-			auto lowLow = Loom::shiftPattern(this->patternTable[iLengthLow - 1][iDensityLow], iShiftLow, iLengthLow);
-			auto lowHigh = Loom::shiftPattern(this->patternTable[iLengthLow - 1][iDensityHigh], iShiftLow, iLengthLow);
-			auto highLow = Loom::shiftPattern(this->patternTable[iLengthLow - 1][iDensityLow], iShiftHigh, iLengthLow);
-			auto highHigh = Loom::shiftPattern(this->patternTable[iLengthLow - 1][iDensityHigh], iShiftHigh, iLengthLow);
+			uint64_t lowLow, lowLowCached, lowHigh, lowHighCached, highLow, highLowCached, highHigh, highHighCached;
+			lowLow = lowLowCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityLow], iShiftLow, iLengthLowClamped);
+			lowHigh = lowHighCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityHigh], iShiftLow, iLengthLowClamped);
+			highLow = highLowCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityLow], iShiftHigh, iLengthLowClamped);
+			highHigh = highHighCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityHigh], iShiftHigh, iLengthLowClamped);
 
 			// Do blending
 			for (int i = 0; i < iLengthLow; i++) {
+				if (i == 64) {
+					lowLow = lowLowCached;
+					lowHigh = lowHighCached;
+					highLow = highLowCached;
+					highHigh = highHighCached;
+				}
+
 				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
 				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
 				amplitudes[i] += (1.f / (i + 1)) * (1.f - lengthFade) * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
