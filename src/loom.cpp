@@ -462,11 +462,10 @@ struct Loom : Module {
 	}
 
 	static float drive(float in, float drive) {
-		if (drive < 1.f) return in * drive;
-		in *= .4f + drive * .6f; // Don't hit the folder as hard
-		float overThresh = std::abs(in) - .8f;
+		in *= drive * .5f; // Don't hit the folder as hard
+		float overThresh = std::abs(in) - .9f;
 		if (overThresh < 0.f) return in;
-		float subAmt = clamp(dsp::exp2_taylor5(1.f + .5f * overThresh * (drive - 1.f)) - 2.f, 0.f, overThresh * 1.25f);
+		float subAmt = clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
 		return (in < 0.f) ? (in + subAmt) : (in - subAmt);
 	}
 
