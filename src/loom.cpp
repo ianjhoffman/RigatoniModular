@@ -134,7 +134,7 @@ struct Loom : Module {
 		struct HarmStrideQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				float out = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue()).first;
+				float out = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
 				return module->continuousStride ? out : std::round(out);
 			}
 		};
@@ -404,18 +404,9 @@ struct Loom : Module {
 		return 1.f + 15.f * normalized;
 	}
 
-	static std::pair<float, bool> scaleStrideKnobValue(float knob) {
-		// Scale knob so there are plateaus 1/36 of the knob travel on either side of integer values.
-		// Also, return whether or not the knob is exactly at 1x stride since that's a "home" point
-		if (knob <= 1.f/36.f) return std::make_pair(0.f, false);
-		if (knob <= 11.f/36.f) return std::make_pair(0.9 * knob - 0.025f, false);
-		if (knob <= 13.f/36.f) return std::make_pair(0.25f, true);
-		if (knob <= 23.f/36.f) return std::make_pair(0.9 * knob - 0.075f, false);
-		if (knob <= 25.f/36.f) return std::make_pair(0.5f, false);
-		if (knob <= 29.f/36.f) return std::make_pair(2.25f * knob - 1.0625f, false);
-		if (knob <= 31.f/36.f) return std::make_pair(0.75f, false);
-		if (knob <= 35.f/36.f) return std::make_pair(2.25f * knob - 1.1875f, false);
-		return std::make_pair(1.f, false);
+	static float scaleStrideKnobValue(float knob) {
+		if (knob <= 2.f/3.f) return (3.f/4.f) * knob;
+		return (1.5f * knob) - .5f;
 	}
 
 	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
@@ -453,15 +444,14 @@ struct Loom : Module {
 		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getVoltage();
 		density = clamp(density);
 
-		auto strideScaled = Loom::scaleStrideKnobValue(params[HARM_STRIDE_KNOB_PARAM].getValue());
-		bool strideIsOne = strideScaled.second;
+		float strideScaled = Loom::scaleStrideKnobValue(params[HARM_STRIDE_KNOB_PARAM].getValue());
 		float stride = 4.f * clamp(
-			strideScaled.first + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
+			strideScaled + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
 		);
 		if (!this->continuousStride) {
 			stride = std::round(stride);
-			if (std::abs(stride - 1.f) < .1f) strideIsOne = true;
 		}
+		bool strideIsOne = std::abs(stride - 1.f) < .01f; // Reasonable epsilon
 
 		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
 		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
