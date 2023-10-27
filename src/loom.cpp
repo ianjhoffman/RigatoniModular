@@ -149,10 +149,10 @@ struct Loom : Module {
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
 		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
 		configParam(SPECTRAL_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Tilt");
-		configParam(SPECTRAL_INTENSITY_KNOB_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity");
+		configParam(SPECTRAL_INTENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Intensity");
 		configParam(HARMONIC_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Partial Complexity Pivot");
 		configParam(HARMONIC_TILT_KNOB_PARAM, 0.f, 1.f, 0.f, "Partial Complexity Tilt");
-		configParam(HARMONIC_INTENSITY_KNOB_PARAM, -1.f, 1.f, 0.f, "Partial Complexity Intensity");
+		configParam(HARMONIC_INTENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Partial Complexity Intensity");
 
 		// Attenuverters
 		configParam(HARM_COUNT_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Count CV Attenuverter");
@@ -215,6 +215,7 @@ struct Loom : Module {
 	static constexpr float VCO_MULTIPLIER = 20.f;
 	static constexpr float LIN_FM_FACTOR = 5.f;
 	static constexpr float MAX_FREQ = 10240.f;
+	static constexpr float SLOPE_SCALE = 0.25f;
 
 	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
@@ -397,17 +398,11 @@ struct Loom : Module {
 		return iLengthHigh;
 	}
 
-	static std::tuple<float, float, float> calculatePivotSlopes(float tilt, float belowPivot, float abovePivot) {
-		if (tilt <= .25f) {
-			return {(1.f - 4.f * tilt) / belowPivot, -1.f / abovePivot, 1.f};
-		}
+	static std::tuple<float, float, float> calculatePivotSlopes(float tilt) {
 		if (tilt <= .5f) {
-			return {(2.f - 8.f * tilt) / belowPivot, (-4.f * tilt) / abovePivot, 4.f * tilt};
+			return {-3.f * tilt, -1.f - tilt, 1.f + tilt};
 		}
-		if (tilt <= .75f) {
-			return {(-4.f + 4.f * tilt) / belowPivot, (-6.f + 8.f * tilt) / abovePivot, 4.f * (1.f - tilt)};
-		}
-		return {-1.f / belowPivot, (4.f * tilt - 3.f) / abovePivot, 1.f};
+		return {-2.f + tilt, -3.f + 3.f * tilt, 2.f - tilt};
 	}
 
 	static void shapeAmplitudes(
@@ -418,14 +413,15 @@ struct Loom : Module {
 		float intensity
 	) {
 		float pivotHarm = pivot * (numHarmonics - 1);
-		auto slopes = Loom::calculatePivotSlopes(tilt, pivotHarm, (float)(numHarmonics - 1) - pivotHarm);
-
-		// Make sure all parameters are scaled by intensity before applying them (it can reverse pivot amplitude around 1x)
-		float belowSlope = std::get<0>(slopes) * intensity;
-		float aboveSlope = std::get<1>(slopes) * intensity;
-		float pivotAmplitude = 1.f + intensity * (std::get<2>(slopes) - 1.f);
-
-		// TODO - apply amplitudes
+		auto slopes = Loom::calculatePivotSlopes(tilt);
+		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE;
+		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE;
+		for (int i = 0; i < numHarmonics; i++) {
+			float diff = pivotHarm - (float)i;
+			float amp = amplitudes[i] * (std::get<2>(slopes) + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
+			amp = clamp(amp, 0.f, 2.f); // No negative amplitudes
+			amplitudes[i] = crossfade(amplitudes[i], amp, intensity);
+		}
 	}
 
 	static float scaleLength(float normalized) {
