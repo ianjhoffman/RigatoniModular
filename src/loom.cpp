@@ -381,7 +381,7 @@ struct Loom : Module {
 			auto highHigh = Loom::shiftPattern(this->patternTable[iLengthLow - 1][iDensityHigh], iShiftHigh, iLengthLow);
 
 			// Do blending
-			for (int i = 0; i < iLengthHigh; i++) {
+			for (int i = 0; i < iLengthLow; i++) {
 				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
 				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
 				amplitudes[i] += (1.f / (i + 1)) * (1.f - lengthFade) * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
