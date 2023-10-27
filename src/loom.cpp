@@ -206,6 +206,7 @@ struct Loom : Module {
 	// Synthesis parameters
 	std::array<float, 128> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
+	dsp::MinBlepGenerator<16, 16, float> out2Blep;
 	dsp::ClockDivider lightDivider;
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
@@ -460,6 +461,10 @@ struct Loom : Module {
 		return std::min(freq, Loom::MAX_FREQ);
 	}
 
+	static float drive(float in, float drive) {
+		return (drive < 1.f) ? (in * drive) : in;
+	}
+
 	void process(const ProcessArgs& args) override {
 		// Read harmonic structure switches
 		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
@@ -507,7 +512,9 @@ struct Loom : Module {
 		Loom::shapeAmplitudes(harmonicAmplitudes, numHarmonics, tilt, pivot, intensity);
 		
 		// Fundamental boosting
-		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) harmonicAmplitudes[0] = 1.f;
+		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
+			harmonicAmplitudes[0] = std::max(harmonicAmplitudes[0], .5f);
+		}
 
 		// Calculate fundamental frequency in Hz
 		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
@@ -527,7 +534,7 @@ struct Loom : Module {
 		
 		float phaseInc = freq * args.sampleTime;
 		float oddZeroOut = 0.f;
-		// TODO: even/90 degree output
+		float evenNinetyOut = 0.f;
 		float fundOut = 0.f;
 		float squareOut = 0.f;
 		for (int i = 0; i < 128; i++) {
@@ -550,10 +557,12 @@ struct Loom : Module {
 			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
 			if (overNyquist || i >= numHarmonics) continue;
 
-			// TODO: even/odd splitting & cosine
+			// TODO: even/odd splitting
 			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
+			float cosPhase = harmonicPhaseAccum + .25f * harmonicMultiples[i];
+			evenNinetyOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
 			if (i == 0) {
-				fundOut = oddZeroOut;
+				fundOut = sin2pi_pade_05_5_4(harmonicPhaseAccum);
 				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
 				// TODO: insert discontinuity into minblep for square
 			}
@@ -561,8 +570,13 @@ struct Loom : Module {
 
 		// TODO: find a way to normalize amplitude of main 2 outputs
 
+		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
+		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
+
 		oddZeroOut += this->out1Blep.process();
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * oddZeroOut);
+		evenNinetyOut += this->out2Blep.process();
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(oddZeroOut, drive));
+		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(evenNinetyOut, drive));
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * fundOut);
 		outputs[SQUARE_OUTPUT].setVoltage(5.f * squareOut);
 
