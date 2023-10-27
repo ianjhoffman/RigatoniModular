@@ -198,7 +198,7 @@ struct Loom : Module {
 	static constexpr float VCO_MULTIPLIER = 20.f;
 	static constexpr float LIN_FM_FACTOR = 5.f;
 	static constexpr float MAX_FREQ = 10240.f;
-	static constexpr float SLOPE_SCALE = 0.05f;
+	static constexpr float SLOPE_SCALE = 0.0025f;
 
 	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
@@ -416,12 +416,13 @@ struct Loom : Module {
 		float pivot,
 		float intensity
 	) {
+		// TODO - scale pivot point and length multiplier esponentially by length
 		float pivotHarm = pivot * (length - 1);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
-		float slopeMultiplier = (intensity > 0.5f) ? (32.f * intensity - 15.f) : 1.f;
+		float slopeMultiplier = (intensity > 0.5f) ? (16.f * intensity - 7.f) : 1.f;
 		intensity = clamp(intensity * 2.f);
-		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
-		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
+		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		for (int i = 0; i < std::ceil(length); i++) {
 			float diff = pivotHarm - (float)i;
 			float amp = amplitudes[i] * (std::get<2>(slopes) + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
@@ -571,8 +572,6 @@ struct Loom : Module {
 				// TODO: insert discontinuity into minblep for square
 			}
 		}
-
-		// TODO: find a way to normalize amplitude of main 2 outputs
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
