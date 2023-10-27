@@ -204,7 +204,7 @@ struct Loom : Module {
 	std::array<std::vector<uint64_t>, 64> patternTable{};
 
 	// Synthesis parameters
-	std::array<float, 64> phaseAccumulators;
+	std::array<float, 128> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
 	dsp::ClockDivider lightDivider;
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
@@ -278,33 +278,40 @@ struct Loom : Module {
 	}
 
 	int setAmplitudesAndMultiples(
-		std::array<float, 64> &amplitudes,
-		std::array<float, 64> &multiples,
-		float length, // 1-64
+		std::array<float, 128> &amplitudes,
+		std::array<float, 128> &multiples,
+		float length, // 1-128
 		float density, // 0-1
 		float stride, // 0-4
 		float shift, // 0-1
 		bool interpolate
 	) {
 		// Always calculate all frequency multiples
-		for (int i = 0; i < 64; i++) {
+		for (int i = 0; i < 128; i++) {
 			multiples[i] = 1.f + i * stride;
 		}
 
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
-			int iDensity = (int)std::round(density * (iLength - 1));
-			int iShift = (int)std::round(shift * (iLength - 1));
+			int clampedLength = std::min(iLength, 64);
+			int iDensity = (int)std::round(density * (clampedLength - 1));
+			int iShift = (int)std::round(shift * (clampedLength - 1));
 
-			auto pattern = Loom::shiftPattern(this->patternTable[iLength - 1][iDensity], iShift, iLength);
+			auto pattern = Loom::shiftPattern(this->patternTable[clampedLength - 1][iDensity], iShift, clampedLength);
+			auto shiftPattern = pattern;
 			for (int i = 0; i < iLength; i++) {
-				amplitudes[i] = (pattern & AMP_MASK) ? (1.f / (i + 1)) : 0.f;
-				pattern <<= 1;
+				if (i == 64) shiftPattern = pattern; // Wrap pattern for partial counts >64
+				amplitudes[i] = (shiftPattern & AMP_MASK) ? (1.f / (i + 1)) : 0.f;
+				shiftPattern <<= 1;
 			}
 
 			return iLength;
 		}
+
+		// TODO - interpolation support for 128 partials
+		amplitudes[0] = 1.f;
+		return 1;
 
 		// Interpolation is a lot more complicated but we're essentially finding a point somewhere in the 3D pattern space
 		// Length is the "outer" variable in our 2x2x2 fade since it affects the scaling of density and shift
@@ -388,12 +395,13 @@ struct Loom : Module {
 	}
 
 	static void shapeAmplitudes(
-		std::array<float, 64> &amplitudes,
+		std::array<float, 128> &amplitudes,
 		int numHarmonics,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
 		float intensity
 	) {
+		// TODO: make intensity past 50% move towards doubling the slope at 100%
 		float pivotHarm = pivot * (numHarmonics - 1);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE;
@@ -407,11 +415,12 @@ struct Loom : Module {
 	}
 
 	static float scaleLength(float normalized) {
-		if (normalized >= 0.8f) return 32.f * ((5.f * normalized) - 3.f);
-		if (normalized >= 0.6f) return 16.f * ((5.f * normalized) - 2.f);
-		if (normalized >= 0.4f) return 8.f * ((5.f * normalized) - 1.f);
-		if (normalized >= 0.2f) return 20.f * normalized;
-		return 1.f + 15.f * normalized;
+		if (normalized >= 5.f/6.f) return 64.f * ((6.f * normalized) - 4.f);
+		if (normalized >= 4.f/6.f) return 32.f * ((6.f * normalized) - 3.f);
+		if (normalized >= 3.f/6.f) return 16.f * ((6.f * normalized) - 2.f);
+		if (normalized >= 2.f/6.f) return 8.f * ((6.f * normalized) - 1.f);
+		if (normalized >= 1.f/6.f) return 24.f * normalized;
+		return 1.f + 18.f * normalized;
 	}
 
 	static float scaleStrideKnobValue(float knob) {
@@ -468,8 +477,8 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Actually do partial amplitude/frequency calculations
-		std::array<float, 64> harmonicAmplitudes;
-		std::array<float, 64> harmonicMultiples;
+		std::array<float, 128> harmonicAmplitudes;
+		std::array<float, 128> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, length,
 			density, stride, shift, this->interpolate
@@ -506,7 +515,7 @@ struct Loom : Module {
 		// TODO: even/90 degree output
 		float fundOut = 0.f;
 		float squareOut = 0.f;
-		for (int i = 0; i < 64; i++) {
+		for (int i = 0; i < 128; i++) {
 			float harmonicPhaseAccum = this->phaseAccumulators[i];
 			if (continuousStrideModeChanged || lfoModeChanged || sync) {
 				harmonicPhaseAccum = 0.f;
