@@ -303,7 +303,7 @@ struct Loom : Module {
 			auto shiftPattern = pattern;
 			for (int i = 0; i < iLength; i++) {
 				if (i == 64) shiftPattern = pattern; // Wrap pattern for partial counts >64
-				amplitudes[i] = (shiftPattern & AMP_MASK) ? (1.f / (i + 1)) : 0.f;
+				amplitudes[i] = (shiftPattern & AMP_MASK) ? 1.f : 0.f;
 				shiftPattern <<= 1;
 			}
 
@@ -350,7 +350,7 @@ struct Loom : Module {
 
 				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
 				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
-				amplitudes[i] = (1.f / (i + 1)) * lengthFade * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
+				amplitudes[i] = lengthFade * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
 
 				lowLow <<= 1;
 				lowHigh <<= 1;
@@ -391,7 +391,7 @@ struct Loom : Module {
 
 				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
 				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
-				amplitudes[i] += (1.f / (i + 1)) * (1.f - lengthFade) * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
+				amplitudes[i] += (1.f - lengthFade) * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
 
 				lowLow <<= 1;
 				lowHigh <<= 1;
@@ -416,7 +416,6 @@ struct Loom : Module {
 		float pivot,
 		float intensity
 	) {
-		// TODO - scale pivot point and length multiplier esponentially by length
 		float cubicPivot = dsp::cubic(pivot);
 		float pivotHarm = cubicPivot * (length - 1.f);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
@@ -462,8 +461,10 @@ struct Loom : Module {
 		return std::min(freq, Loom::MAX_FREQ);
 	}
 
+	// Soft clipping (quadratic) drive with a small amount of wave folding at the extreme
 	static float drive(float in, float drive) {
-		in *= drive * .5f; // Don't hit the folder as hard
+		// Don't hit the folder as hard, up to 12 o'clock on the drive knob should almost never clip
+		in *= drive * .5f;
 		float overThresh = std::abs(in) - .9f;
 		if (overThresh < 0.f) return in;
 		float subAmt = clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
@@ -535,6 +536,7 @@ struct Loom : Module {
 		// TODO: calculate sync
 		bool sync = false;
 
+		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
 		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
 		float phaseInc = freq * args.sampleTime;
 		float oddZeroOut = 0.f;
@@ -550,7 +552,7 @@ struct Loom : Module {
 
 			if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0) {
 				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
-				// TODO: maybe insert discontinuity here at each cycle if we're in sync mode?
+				// TODO: insert discontinuity here at each cycle if we're in sync mode?
 			} else {
 				harmonicPhaseAccum += phaseInc * harmonicMultiples[i];
 			}
@@ -561,15 +563,20 @@ struct Loom : Module {
 			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
 			if (overNyquist || i >= numHarmonics) continue;
 
-			// TODO: even/odd splitting
 			float sinPhase = harmonicPhaseAccum + pmCv * harmonicMultiples[i];
-			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(sinPhase - std::floor(sinPhase));
+			float sinVal = sin2pi_pade_05_5_4(sinPhase - std::floor(sinPhase));
 			float cosPhase = harmonicPhaseAccum + (.25f + pmCv) * harmonicMultiples[i];
-			evenNinetyOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
+			float cosVal = sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
+			float amp = (1.f / (float)(i + 1)) * (splitMode ? 2.f * harmonicAmplitudes[i] : harmonicAmplitudes[i]);
 			if (i == 0) {
-				fundOut = sin2pi_pade_05_5_4(harmonicPhaseAccum);
+				oddZeroOut = amp * sinVal;
+				evenNinetyOut = splitMode ? 0.9f * amp * sinVal : amp * cosVal;
+				fundOut = sinVal;
 				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
 				// TODO: insert discontinuity into minblep for square
+			} else {
+				oddZeroOut += splitMode ? ((i & 1) ? 0.f : amp * sinVal) : amp * sinVal;
+				evenNinetyOut += splitMode ? ((i & 1) ? 0.9f * amp * sinVal : 0.f) : amp * cosVal;
 			}
 		}
 
@@ -589,6 +596,7 @@ struct Loom : Module {
 			lights[OSCILLATOR_LED_LIGHT + 0].setSmoothBrightness(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT + 1].setSmoothBrightness(-oscLight, lightTime);
 			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
+			// TODO - spectral shaping lights
 		}
 
 		this->lastContinuousStrideMode = continuousStrideMode;
