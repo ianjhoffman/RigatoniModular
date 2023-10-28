@@ -417,17 +417,17 @@ struct Loom : Module {
 		float intensity
 	) {
 		// TODO - scale pivot point and length multiplier esponentially by length
-		float pivotHarm = pivot * (length - 1);
+		float cubicPivot = dsp::cubic(pivot);
+		float pivotHarm = cubicPivot * (length - 1.f);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
-		float slopeMultiplier = (intensity > 0.5f) ? (16.f * intensity - 7.f) : 1.f;
-		intensity = clamp(intensity * 2.f);
+		float slopeMultiplier = (intensity < .5f) ? (intensity * 2.f) : (4.f * intensity - 1.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		for (int i = 0; i < std::ceil(length); i++) {
 			float diff = pivotHarm - (float)i;
-			float amp = amplitudes[i] * (std::get<2>(slopes) + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
-			amp = clamp(amp, 0.f, 2.f); // No negative amplitudes
-			amplitudes[i] = crossfade(amplitudes[i], amp, intensity);
+			float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
+			float amp = amplitudes[i] * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
+			amplitudes[i] = clamp(amp, 0.f, 2.f); // No negative amplitudes
 		}
 	}
 
