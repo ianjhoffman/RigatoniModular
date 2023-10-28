@@ -553,7 +553,8 @@ struct Loom : Module {
 
 			if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0) {
 				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
-				// TODO: insert discontinuity here at each cycle if we're in sync mode?
+				// TODO: PM doesn't play nicely with synced stride mode
+				// TODO: insert discontinuity here at each cycle if we're in sync mode
 			} else {
 				harmonicPhaseAccum += phaseInc * harmonicMultiples[i];
 			}
