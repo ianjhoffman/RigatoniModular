@@ -208,6 +208,7 @@ struct Loom : Module {
 	std::array<float, 128> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep;
 	dsp::MinBlepGenerator<16, 16, float> out2Blep;
+	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	dsp::ClockDivider lightDivider;
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
@@ -288,7 +289,7 @@ struct Loom : Module {
 		float shift, // 0-1
 		bool interpolate
 	) {
-		// Always calculate all frequency multiples
+		// Always calculate all frequency multiples so everything stays aligned
 		for (int i = 0; i < 128; i++) {
 			multiples[i] = 1.f + i * stride;
 		}
@@ -594,8 +595,10 @@ struct Loom : Module {
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
 
+		// TODO: normalize main outs a bit based on harmonic sum (maybe smart sum based on even vs. odd?)
 		oddZeroOut += this->out1Blep.process();
 		evenNinetyOut += this->out2Blep.process();
+		squareOut += this->squareBlep.process();
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(oddZeroOut, drive));
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(evenNinetyOut, drive));
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * fundOut);
