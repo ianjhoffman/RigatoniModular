@@ -64,7 +64,8 @@ struct Loom : Module {
 		OUTPUTS_LEN
 	};
 	enum LightId {
-		ENUMS(OSCILLATOR_LED_LIGHT, 2),
+		OSCILLATOR_LED_LIGHT_GREEN,
+		OSCILLATOR_LED_LIGHT_RED,
 		S_LED_1_LIGHT,
 		S_LED_2_LIGHT,
 		S_LED_3_LIGHT,
@@ -411,6 +412,7 @@ struct Loom : Module {
 
 	static void shapeAmplitudes(
 		std::array<float, 128> &amplitudes,
+		std::array<float, 5> &ledIndicators,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
@@ -422,11 +424,17 @@ struct Loom : Module {
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 2.f) : (4.f * intensity - 1.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
+		float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
 		for (int i = 0; i < std::ceil(length); i++) {
 			float diff = pivotHarm - (float)i;
-			float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
 			float amp = amplitudes[i] * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
 			amplitudes[i] = clamp(amp, 0.f, 2.f); // No negative amplitudes
+		}
+
+		// LED indicators
+		for (int i = 0; i < 5; i++) {
+			float diff = pivotHarm - ((length - 1.f) * (0.25f * (float)i));
+			ledIndicators[i] = clamp((2.f/3.f) * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff)));
 		}
 	}
 
@@ -515,7 +523,8 @@ struct Loom : Module {
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
-		Loom::shapeAmplitudes(harmonicAmplitudes, length, tilt, pivot, intensity);
+		std::array<float, 5> shapingLedIndicators;
+		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
@@ -595,10 +604,14 @@ struct Loom : Module {
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
 			float oscLight = (this->phaseAccumulators[0] < .5f) ? 1.f : -1.f;
-			lights[OSCILLATOR_LED_LIGHT + 0].setSmoothBrightness(oscLight, lightTime);
-			lights[OSCILLATOR_LED_LIGHT + 1].setSmoothBrightness(-oscLight, lightTime);
+			lights[OSCILLATOR_LED_LIGHT_GREEN].setSmoothBrightness(oscLight, lightTime);
+			lights[OSCILLATOR_LED_LIGHT_RED].setSmoothBrightness(-oscLight, lightTime);
 			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
-			// TODO - spectral shaping lights
+			lights[S_LED_1_LIGHT].setSmoothBrightness(shapingLedIndicators[0], lightTime);
+			lights[S_LED_2_LIGHT].setSmoothBrightness(shapingLedIndicators[1], lightTime);
+			lights[S_LED_3_LIGHT].setSmoothBrightness(shapingLedIndicators[2], lightTime);
+			lights[S_LED_4_LIGHT].setSmoothBrightness(shapingLedIndicators[3], lightTime);
+			lights[S_LED_5_LIGHT].setSmoothBrightness(shapingLedIndicators[4], lightTime);
 		}
 
 		this->lastContinuousStrideMode = continuousStrideMode;
@@ -670,7 +683,7 @@ struct LoomWidget : ModuleWidget {
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(84.044, 111.249)), module, Loom::EVEN_NINETY_DEGREE_OUTPUT));
 
 		// Multi-colored LEDs
-		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(13.583, 13.071)), module, Loom::OSCILLATOR_LED_LIGHT));
+		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(13.583, 13.071)), module, Loom::OSCILLATOR_LED_LIGHT_GREEN));
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(71.907, 78.750)), module, Loom::STRIDE_1_LIGHT));
