@@ -24,8 +24,8 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
      inkscape:zoom="2.3623825"
-     inkscape:cx="268.37314"
-     inkscape:cy="63.283571"
+     inkscape:cx="192.17887"
+     inkscape:cy="423.93643"
      inkscape:window-width="1440"
      inkscape:window-height="768"
      inkscape:window-x="0"
@@ -421,17 +421,12 @@
          style="font-weight:800;font-size:2.29306px;font-family:Avenir;-inkscape-font-specification:'Avenir Ultra-Bold';text-align:center;letter-spacing:-0.105833px;word-spacing:0px;text-anchor:middle;fill:#e6e6e6;stroke:#e6e6e6;stroke-width:0;stroke-linecap:square;paint-order:stroke fill markers"
          inkscape:label="FUND"
          aria-label="FUND" />
-      <text
-         xml:space="preserve"
-         style="font-weight:800;font-size:2.55764px;font-family:Avenir;-inkscape-font-specification:'Avenir Ultra-Bold';text-align:center;letter-spacing:-0.105833px;word-spacing:0px;text-anchor:middle;fill:#333333;fill-opacity:1;stroke-width:0.4;stroke-linecap:square;paint-order:stroke fill markers"
-         x="29.555876"
-         y="117.64046"
-         id="text15"><tspan
-           sodipodi:role="line"
-           id="tspan10"
-           style="font-size:2.55764px;stroke-width:0.4"
-           x="29.502958"
-           y="117.64046">DRIVE</tspan></text>
+      <path
+         d="m 26.067922,115.82965 h 0.598488 q 0.217399,0 0.41178,0.0486 0.196938,0.0486 0.342723,0.15858 0.145786,0.10742 0.230188,0.28134 0.08696,0.17392 0.08696,0.42201 0,0.21995 -0.0844,0.38876 -0.08185,0.16625 -0.222515,0.28134 -0.14067,0.11254 -0.32482,0.17136 -0.18415,0.0588 -0.386204,0.0588 h -0.652198 z m 0.398992,1.44251 h 0.207169 q 0.138112,0 0.255764,-0.0281 0.120209,-0.0281 0.207168,-0.0921 0.08696,-0.0665 0.135555,-0.17136 0.05115,-0.10742 0.05115,-0.26088 0,-0.133 -0.05115,-0.23019 -0.0486,-0.0998 -0.132997,-0.16369 -0.0844,-0.0639 -0.199496,-0.0946 -0.112536,-0.0332 -0.23786,-0.0332 h -0.235303 z m 1.436421,-1.44251 h 0.700793 q 0.138113,0 0.260879,0.0281 0.125325,0.0256 0.2174,0.0895 0.09463,0.0614 0.148343,0.1688 0.05627,0.10487 0.05627,0.26344 0,0.19182 -0.09975,0.32738 -0.09975,0.133 -0.291571,0.1688 l 0.460375,0.76474 h -0.478278 l -0.378531,-0.72381 h -0.196938 v 0.72381 h -0.398992 z m 0.398992,0.74939 h 0.235302 q 0.05371,0 0.112537,-0.003 0.06138,-0.005 0.109978,-0.023 0.04859,-0.0205 0.07929,-0.0614 0.03325,-0.0409 0.03325,-0.1151 0,-0.0691 -0.02813,-0.10998 -0.02813,-0.0409 -0.07161,-0.0614 -0.04348,-0.023 -0.09975,-0.0307 -0.05627,-0.008 -0.109978,-0.008 h -0.260879 z m 1.147407,-0.74939 h 0.398992 v 1.81081 h -0.398992 z m 0.477308,0 h 0.45526 l 0.447587,1.18674 h 0.0051 l 0.45526,-1.18674 h 0.427126 l -0.746831,1.81081 h -0.319705 z m 1.889123,0 h 1.230224 v 0.3683 h -0.831233 v 0.33761 h 0.785196 v 0.3683 h -0.785196 v 0.3683 h 0.877271 v 0.3683 h -1.276262 z"
+         id="text15"
+         style="font-weight:800;font-size:2.55764px;font-family:Avenir;-inkscape-font-specification:'Avenir Ultra-Bold';text-align:center;letter-spacing:-0.105833px;word-spacing:0px;text-anchor:middle;fill:#333333;stroke-width:0.4;stroke-linecap:square;paint-order:stroke fill markers"
+         inkscape:label="DRIVE"
+         aria-label="DRIVE" />
     </g>
     <g
        id="g32"
