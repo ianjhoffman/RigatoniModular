@@ -535,8 +535,7 @@ struct Loom : Module {
 		// TODO: calculate sync
 		bool sync = false;
 
-		// TODO: phase modulation
-		
+		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
 		float phaseInc = freq * args.sampleTime;
 		float oddZeroOut = 0.f;
 		float evenNinetyOut = 0.f;
@@ -563,8 +562,9 @@ struct Loom : Module {
 			if (overNyquist || i >= numHarmonics) continue;
 
 			// TODO: even/odd splitting
-			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(harmonicPhaseAccum);
-			float cosPhase = harmonicPhaseAccum + .25f * harmonicMultiples[i];
+			float sinPhase = harmonicPhaseAccum + pmCv * harmonicMultiples[i];
+			oddZeroOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(sinPhase - std::floor(sinPhase));
+			float cosPhase = harmonicPhaseAccum + (.25f + pmCv) * harmonicMultiples[i];
 			evenNinetyOut += harmonicAmplitudes[i] * sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
 			if (i == 0) {
 				fundOut = sin2pi_pade_05_5_4(harmonicPhaseAccum);
