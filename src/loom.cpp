@@ -538,6 +538,7 @@ struct Loom : Module {
 
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
 		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
+		pmCv -= std::floor(pmCv);
 		float phaseInc = freq * args.sampleTime;
 		float oddZeroOut = 0.f;
 		float evenNinetyOut = 0.f;
