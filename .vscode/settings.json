@@ -62,6 +62,18 @@
         "memory": "cpp",
         "type_traits": "cpp",
         "algorithm": "cpp",
-        "climits": "cpp"
-    }
+        "climits": "cpp",
+        "functional": "cpp",
+        "iterator": "cpp",
+        "memory_resource": "cpp",
+        "cinttypes": "cpp",
+        "list": "cpp",
+        "map": "cpp",
+        "set": "cpp",
+        "random": "cpp"
+    },
+    "C_Cpp.default.includePath": [
+        "/Users/ihoffman/code/Rack-SDK/include",
+        "/Users/ihoffman/code/Rack-SDK/dep/include"
+    ]
 }
