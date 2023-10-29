@@ -6,6 +6,8 @@
 #include <tuple>
 #include <utility>
 
+using simd::float_4;
+
 // From VCV Fundamental VCO module
 template <typename T>
 T sin2pi_pade_05_5_4(T x) {
@@ -206,10 +208,9 @@ struct Loom : Module {
 
 	// Synthesis parameters
 	std::array<float, 128> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float> out1Blep;
-	dsp::MinBlepGenerator<16, 16, float> out2Blep;
-	dsp::MinBlepGenerator<16, 16, float> squareBlep;
+	dsp::MinBlepGenerator<16, 16, float> out1Blep, out2Blep, squareBlep, fundBlep;
 	dsp::ClockDivider lightDivider;
+	float lastFundPhase{0.f}, lastSquare{0.f}, lastSync{0.f};
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
 	// For custom knob displays to read
@@ -471,13 +472,14 @@ struct Loom : Module {
 	}
 
 	// Soft clipping (quadratic) drive with a small amount of wave folding at the extreme
-	static float drive(float in, float drive) {
+	static float_4 drive(float_4 in, float drive) {
 		// Don't hit the folder as hard, up to 12 o'clock on the drive knob should almost never clip
 		in *= drive * .5f;
-		float overThresh = std::abs(in) - .9f;
-		if (overThresh < 0.f) return in;
-		float subAmt = clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
-		return (in < 0.f) ? (in + subAmt) : (in - subAmt);
+		auto overThresh = simd::abs(in) - .9f;
+		auto underThreshMask = overThresh < 0.f;
+		auto subAmt = simd::clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
+		auto driven = simd::ifelse(in < 0.f, in + subAmt, in - subAmt);
+		return simd::ifelse(underThreshMask, in, driven);
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -543,66 +545,83 @@ struct Loom : Module {
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
 		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
 
-		// TODO: calculate sync
-		bool sync = false;
+		// Calculate sync
+		float syncIn = inputs[SYNC_INPUT].getVoltage();
+		float syncCrossingSamplesAgo = -this->lastSync / (syncIn - this->lastSync);
+		this->lastSync = syncIn;
+		bool sync = (0.f < syncCrossingSamplesAgo) && (syncCrossingSamplesAgo <= 1.f) && (syncIn >= 0.f);
 
+		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
 		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
 		pmCv -= std::floor(pmCv);
 		float phaseInc = freq * args.sampleTime;
-		float oddZeroOut = 0.f;
-		float evenNinetyOut = 0.f;
-		float fundOut = 0.f;
-		float squareOut = 0.f;
+		float normalSyncPhase = (1.f - syncCrossingSamplesAgo) * phaseInc;
+		float fundOut = 0.f, fundOutSync = 0.f, squareOut = 0.f, squareOutSync = 0.f;
+		float_4 mainOutsPacked = 0.f;
+
+		// Calculate fundamental sync for non-free continuous stride
+		float fundSyncCrossingSamplesAgo = (this->phaseAccumulators[0] + phaseInc) - 1.f;
+		float fundSyncPhase = (1.f - fundSyncCrossingSamplesAgo) * phaseInc;
+		bool fundSync = fundSyncCrossingSamplesAgo > 0.f;
+
+		// Arbitrary sample crossing in between samples for mode change sync
+		float modeChangeSamplesAgo, modeChangeSyncPhase = 0.5f;
+
 		for (int i = 0; i < 128; i++) {
-			float harmonicPhaseAccum = this->phaseAccumulators[i];
-			if (continuousStrideModeChanged || lfoModeChanged || sync) {
-				harmonicPhaseAccum = 0.f;
-				// TODO: insert discontinuity into minblep
+			float phaseWithoutSync, phaseWithSync;
+			phaseWithoutSync = phaseWithSync = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
+
+			// 3 types of sync that can introduce discontinuities
+			if (continuousStrideModeChanged || lfoModeChanged) {
+				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
+			} else if (sync) {
+				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
+			} else if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0 && fundSync) {
+				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
 			}
 
-			if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0) {
-				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
-				// TODO: PM doesn't play nicely with synced stride mode
-				// TODO: insert discontinuity here at each cycle if we're in sync mode
-			} else {
-				harmonicPhaseAccum += phaseInc * harmonicMultiples[i];
-			}
+			phaseWithoutSync -= std::floor(phaseWithoutSync);
+			phaseWithSync -= std::floor(phaseWithSync);
+			this->phaseAccumulators[i] = phaseWithSync;
 
-			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
-			this->phaseAccumulators[i] = harmonicPhaseAccum;
-
+			// Some simple built-in band-limiting
+			// (not perfect because of drive feature, which can introduce extra harmonics)
 			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
 			if (overNyquist || i >= numHarmonics) continue;
 
-			float sinPhase = harmonicPhaseAccum + pmCv * harmonicMultiples[i];
-			float sinVal = sin2pi_pade_05_5_4(sinPhase - std::floor(sinPhase));
-			float cosPhase = harmonicPhaseAccum + (.25f + pmCv) * harmonicMultiples[i];
-			float cosVal = sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
-			float amp = (1.f / (float)(i + 1)) * (splitMode ? 2.f * harmonicAmplitudes[i] : harmonicAmplitudes[i]);
+			// Do the actual additive synthesis thing (synced/unsynced versions for band-limiting)
+			float_4 packedPhases = {phaseWithoutSync, phaseWithSync, phaseWithoutSync, phaseWithSync};
+			packedPhases += {
+				pmCv * harmonicMultiples[i], pmCv * harmonicMultiples[i],
+				(.25f + pmCv) * harmonicMultiples[i], (.25f + pmCv) * harmonicMultiples[i],
+			};
+			float_4 amp = (1.f / (float)(i + 1)) * (splitMode ? 2.f * harmonicAmplitudes[i] : harmonicAmplitudes[i]);
+			float_4 splitAmp = simd::ifelse(simd::movemaskInverse<float_4>(splitMode ? 0b1100 : 0), 0.9f, 1.f);
+			// [0] = sin without sync, [1] = sin with sync, [2] = cos without sync, [3] = cos with sync
+			auto packedVals = sin2pi_pade_05_5_4(packedPhases - simd::floor(packedPhases)) * amp * splitAmp;
 			if (i == 0) {
-				oddZeroOut = amp * sinVal;
-				evenNinetyOut = splitMode ? 0.9f * amp * sinVal : amp * cosVal;
-				fundOut = sinVal;
-				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
-				// TODO: insert discontinuity into minblep for square
+				mainOutsPacked = packedVals;
 			} else {
-				oddZeroOut += splitMode ? ((i & 1) ? 0.f : amp * sinVal) : amp * sinVal;
-				evenNinetyOut += splitMode ? ((i & 1) ? 0.9f * amp * sinVal : 0.f) : amp * cosVal;
+				int harmSplitMask = splitMode ? ((i & 1) ? 0b0011 : 0b1100) : 0b1111;
+				mainOutsPacked += simd::ifelse(simd::movemaskInverse<float_4>(harmSplitMask), packedVals, 0.f);
 			}
 		}
+
+		// TODO: do fundamental and square
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
 
 		// TODO: normalize main outs a bit based on harmonic sum (maybe smart sum based on even vs. odd?)
-		oddZeroOut += this->out1Blep.process();
-		evenNinetyOut += this->out2Blep.process();
-		squareOut += this->squareBlep.process();
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(oddZeroOut, drive));
-		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(evenNinetyOut, drive));
-		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * fundOut);
-		outputs[SQUARE_OUTPUT].setVoltage(5.f * squareOut);
+		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+
+		// TODO: blep
+
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * (mainOutsPacked[1] + this->out1Blep.process()));
+		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * (mainOutsPacked[3] + this->out2Blep.process()));
+		outputs[SQUARE_OUTPUT].setVoltage(5.f * (squareOut +  this->squareBlep.process()));
+		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * (fundOut + this->fundBlep.process()));
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
@@ -617,7 +636,7 @@ struct Loom : Module {
 			lights[S_LED_5_LIGHT].setSmoothBrightness(shapingLedIndicators[4], lightTime);
 		}
 
-		this->lastContinuousStrideMode = continuousStrideMode;
+		this->lastSquare = squareOut;
 	}
 };
 
