@@ -421,7 +421,7 @@ struct Loom : Module {
 	}
 
 	static void shapeAmplitudes(
-		std::array<float, 64> &amplitudes,
+		std::array<float_4, 16> &amplitudes,
 		std::array<float, 5> &ledIndicators,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
@@ -435,10 +435,13 @@ struct Loom : Module {
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
 		float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
-		for (int i = 0; i < std::ceil(length); i++) {
-			float diff = pivotHarm - (float)i;
-			float amp = amplitudes[i] * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
+		float_4 indices = {0.f, 1.f, 2.f, 3.f};
+		for (int i = 0; i < 16; i++) {
+			float_4 diffs = pivotHarm - indices;
+			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
+			auto amp = amplitudes[i] * (pivotMultiplier + slopes * simd::abs(diffs));
 			amplitudes[i] = clamp(amp, 0.f, 2.f); // No negative amplitudes
+			indices += 4.f;
 		}
 
 		// LED indicators
@@ -535,9 +538,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-
-		// TODO: implement this with SIMD
-		//Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
