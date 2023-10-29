@@ -311,6 +311,8 @@ struct Loom : Module {
 			};
 		}
 
+		// TODO: make this cut off harmonics over threshold
+
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
@@ -675,6 +677,7 @@ struct Loom : Module {
 		mainOutsPacked = 5.f * Loom::drive(mainOutsPacked, drive);
 
 		// BLEP
+		// TODO: figure out why this isn't doing what it's supposed to do
 		if (doSync) {
 			float out1Disc = mainOutsPacked[1] - mainOutsPacked[0];
 			float out2Disc = mainOutsPacked[3] - mainOutsPacked[2];
