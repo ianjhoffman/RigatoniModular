@@ -208,7 +208,7 @@ struct Loom : Module {
 	std::array<std::array<std::array<float, 64>, 64>, 64> patternTable{};
 
 	// Synthesis parameters
-	std::array<float_4, 32> phaseAccumulators;
+	std::array<float_4, 16> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep, out2Blep, squareBlep, fundBlep;
 	dsp::ClockDivider lightDivider;
 	float lastFundPhase{0.f}, lastSquare{0.f}, lastSync{0.f};
@@ -278,16 +278,16 @@ struct Loom : Module {
 	}
 
 	int setAmplitudesAndMultiples(
-		std::array<float, 128> &amplitudes,
-		std::array<float_4, 32> &multiples,
-		float length, // 1-128
+		std::array<float, 64> &amplitudes,
+		std::array<float_4, 16> &multiples,
+		float length, // 1-64
 		float density, // 0-1
 		float stride, // 0-4
 		float shift, // 0-1
 		bool interpolate
 	) {
 		// Always calculate all frequency multiples so everything stays aligned
-		for (int i = 0; i < 32; i++) {
+		for (int i = 0; i < 16; i++) {
 			int offset = i << 2;
 			multiples[i] = {
 				1.f + (offset + 0) * stride,
@@ -300,13 +300,12 @@ struct Loom : Module {
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
-			int clampedLength = std::min(iLength, 64);
-			int iDensity = (int)std::round(density * (clampedLength - 1));
-			int iShift = (int)std::round(shift * (clampedLength - 1));
+			int iDensity = (int)std::round(density * (iLength - 1));
+			int iShift = (int)std::round(shift * (iLength - 1));
 
-			auto pattern = this->patternTable[clampedLength - 1][iDensity];
+			auto pattern = this->patternTable[iLength - 1][iDensity];
 			for (int i = 0; i < iLength; i++) {
-				amplitudes[i] = pattern[(iShift + i) % clampedLength];
+				amplitudes[i] = pattern[(iShift + i) % iLength];
 			}
 
 			return iLength;
@@ -315,60 +314,78 @@ struct Loom : Module {
 		// Interpolation is a lot more complicated but we're essentially finding a point somewhere in the 3D pattern space
 		// Length is the "outer" variable in our 2x2x2 fade since it affects the scaling of density and shift
 		int iLengthLow = (int)std::floor(length);
-		int iLengthLowClamped = std::min(iLengthLow, 64);
-		int iLengthHigh = std::min(iLengthLow + 1, 128);
-		int iLengthHighClamped = std::min(iLengthHigh, 64);
+		int iLengthHigh = std::min(iLengthLow + 1, 64);
 		float lengthFade = length - iLengthLow;
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
 		{
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthHighClamped - 1);
+			float fDensity = density * (iLengthHigh - 1);
 			int iDensityLow = (int)std::floor(fDensity);
 			int iDensityHigh = iDensityLow + 1;
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthHighClamped - 1);
+			float fShift = shift * (iLengthHigh - 1);
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
+			float_4 fader = {
+				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
+				densityFade * (1.f - shiftFade), // high density, low shift
+				(1.f - densityFade) * shiftFade, // low density, high shift
+				densityFade * shiftFade // high density, high shift
+			};
+
 			// Do blending
-			auto lowDens = this->patternTable[iLengthHighClamped - 1][iDensityLow];
-			auto highDens = this->patternTable[iLengthHighClamped - 1][iDensityHigh];
+			auto lowDens = this->patternTable[iLengthHigh - 1][iDensityLow];
+			auto highDens = this->patternTable[iLengthHigh - 1][iDensityHigh];
 			for (int i = 0; i < iLengthHigh; i++) {
-				int highShiftIdx = (i + iShiftHigh) % iLengthHighClamped;
-				int lowShiftIdx = (i + iShiftLow) % iLengthHighClamped;
-				float highShiftBlend = crossfade(lowDens[highShiftIdx], highDens[highShiftIdx], densityFade);
-				float lowShiftBlend = crossfade(lowDens[lowShiftIdx], highDens[lowShiftIdx], densityFade);
-				amplitudes[i] = lengthFade * crossfade(lowShiftBlend, highShiftBlend, shiftFade);
+				int highShiftIdx = (i + iShiftHigh) % iLengthHigh;
+				int lowShiftIdx = (i + iShiftLow) % iLengthHigh;
+				float_4 highAmp = {
+					lowDens[lowShiftIdx], highDens[lowShiftIdx],
+					lowDens[highShiftIdx], highDens[highShiftIdx]
+				};
+				highAmp *= fader * lengthFade;
+				amplitudes[i] = highAmp[0] + highAmp[1] + highAmp[2] + highAmp[3];
 			}
 		}
 
 		// Do low length
 		{
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthLowClamped - 1);
+			float fDensity = density * (iLengthLow - 1);
 			int iDensityLow = (int)std::floor(fDensity);
 			int iDensityHigh = iDensityLow + 1;
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthLowClamped - 1);
+			float fShift = shift * (iLengthLow - 1);
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
+			float_4 fader = {
+				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
+				densityFade * (1.f - shiftFade), // high density, low shift
+				(1.f - densityFade) * shiftFade, // low density, high shift
+				densityFade * shiftFade // high density, high shift
+			};
+
 			// Do blending
-			auto lowDens = this->patternTable[iLengthLowClamped - 1][iDensityLow];
-			auto highDens = this->patternTable[iLengthLowClamped - 1][iDensityHigh];
+			auto lowDens = this->patternTable[iLengthLow - 1][iDensityLow];
+			auto highDens = this->patternTable[iLengthLow - 1][iDensityHigh];
 			for (int i = 0; i < iLengthLow; i++) {
-				int highShiftIdx = (i + iShiftHigh) % iLengthLowClamped;
-				int lowShiftIdx = (i + iShiftLow) % iLengthLowClamped;
-				float highShiftBlend = crossfade(lowDens[highShiftIdx], highDens[highShiftIdx], densityFade);
-				float lowShiftBlend = crossfade(lowDens[lowShiftIdx], highDens[lowShiftIdx], densityFade);
-				amplitudes[i] += (1.f - lengthFade) * crossfade(lowShiftBlend, highShiftBlend, shiftFade);
+				int highShiftIdx = (i + iShiftHigh) % iLengthLow;
+				int lowShiftIdx = (i + iShiftLow) % iLengthLow;
+				float_4 lowAmp = {
+					lowDens[lowShiftIdx], highDens[lowShiftIdx],
+					lowDens[highShiftIdx], highDens[highShiftIdx]
+				};
+				lowAmp *= fader * (1.f - lengthFade);
+				amplitudes[i] += lowAmp[0] + lowAmp[1] + lowAmp[2] + lowAmp[3];
 			}
 		}
 
@@ -382,7 +399,7 @@ struct Loom : Module {
 	}
 
 	static void shapeAmplitudes(
-		std::array<float, 128> &amplitudes,
+		std::array<float, 64> &amplitudes,
 		std::array<float, 5> &ledIndicators,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
@@ -410,12 +427,11 @@ struct Loom : Module {
 	}
 
 	static float scaleLength(float normalized) {
-		if (normalized >= 5.f/6.f) return 64.f * ((6.f * normalized) - 4.f);
-		if (normalized >= 4.f/6.f) return 32.f * ((6.f * normalized) - 3.f);
-		if (normalized >= 3.f/6.f) return 16.f * ((6.f * normalized) - 2.f);
-		if (normalized >= 2.f/6.f) return 8.f * ((6.f * normalized) - 1.f);
-		if (normalized >= 1.f/6.f) return 24.f * normalized;
-		return 1.f + 18.f * normalized;
+		if (normalized >= 0.8f) return 32.f * ((5.f * normalized) - 3.f);
+		if (normalized >= 0.6f) return 16.f * ((5.f * normalized) - 2.f);
+		if (normalized >= 0.4f) return 8.f * ((5.f * normalized) - 1.f);
+		if (normalized >= 0.2f) return 20.f * normalized;
+		return 1.f + 15.f * normalized;
 	}
 
 	static float scaleStrideKnobValue(float knob) {
@@ -484,8 +500,8 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Actually do partial amplitude/frequency calculations
-		std::array<float, 128> harmonicAmplitudes;
-		std::array<float_4, 32> harmonicMultiples;
+		std::array<float, 64> harmonicAmplitudes;
+		std::array<float_4, 16> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, length,
 			density, stride, shift, this->interpolate
@@ -555,9 +571,9 @@ struct Loom : Module {
 			doSync = false;
 		}
 
-		std::array<float_4, 32> phasesWithoutSync;
-		std::array<float_4, 32> phasesWithSync;
-		for (int i = 0; i < 32; i++) {
+		std::array<float_4, 16> phasesWithoutSync;
+		std::array<float_4, 16> phasesWithSync;
+		for (int i = 0; i < 16; i++) {
 			phasesWithoutSync[i] = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
 			phasesWithoutSync[i] -= simd::floor(phasesWithoutSync[i]);
 			auto mask = simd::movemaskInverse<float_4>(doSync * 0b1111);
