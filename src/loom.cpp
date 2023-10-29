@@ -564,34 +564,35 @@ struct Loom : Module {
 		// Calculate fundamental sync for non-free continuous stride
 		float fundPhaseWrapped = this->phaseAccumulators[0] + phaseInc - 1.f;
 		bool fundSync = fundPhaseWrapped >= 0.f;
-		float fundSyncCrossingSamplesAgo = fundPhaseWrapped / phaseInc;
-		float fundSyncPhase = this->phaseAccumulators[0];
 
-		// Arbitrary sample crossing in between samples for mode change sync
-		float modeChangeSyncSamplesAgo = 0.5f;
-		float modeChangeSyncPhase = 0.5f * phaseInc;
+		// Some simple built-in band-limiting
+		// (not perfect because of drive feature, which can introduce extra harmonics)
+		int harmonicsToEmit = std::min((int)std::floor(args.sampleRate / (2.f * freq * stride)), numHarmonics);
+
+		// Calculate this outside the loop
+		// 3 types of sync that can introduce discontinuities
+		bool doSync = true;
+		float syncPhase = this->phaseAccumulators[0] + phaseInc;
+		float anySyncCrossingSamplesAgo = 0.f;
+		if (continuousStrideModeChanged || lfoModeChanged) {
+			anySyncCrossingSamplesAgo = 0.f;
+		} else if (sync) {
+			anySyncCrossingSamplesAgo = syncCrossingSamplesAgo;
+			syncPhase = normalSyncPhase;
+		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
+			anySyncCrossingSamplesAgo = fundPhaseWrapped / phaseInc;
+		} else {
+			doSync = false;
+		}
 
 		for (int i = 0; i < 128; i++) {
 			float phaseWithoutSync, phaseWithSync;
-			phaseWithoutSync = phaseWithSync = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
-
-			// 3 types of sync that can introduce discontinuities
-			if (continuousStrideModeChanged || lfoModeChanged) {
-				phaseWithSync = modeChangeSyncPhase * harmonicMultiples[i];
-			} else if (sync) {
-				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
-			} else if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0 && fundSync) {
-				phaseWithSync = fundSyncPhase * harmonicMultiples[i];
-			}
-
+			phaseWithoutSync = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
+			phaseWithSync = simd::ifelse(doSync, syncPhase * harmonicMultiples[i], phaseWithoutSync);
 			phaseWithoutSync -= std::floor(phaseWithoutSync);
 			phaseWithSync -= std::floor(phaseWithSync);
 			this->phaseAccumulators[i] = phaseWithSync;
-
-			// Some simple built-in band-limiting
-			// (not perfect because of drive feature, which can introduce extra harmonics)
-			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
-			if (overNyquist || i >= numHarmonics) continue;
+			if (i >= harmonicsToEmit) continue;
 
 			// Do the actual additive synthesis thing (synced/unsynced versions for band-limiting)
 			float_4 packedPhases = {phaseWithoutSync, phaseWithSync, phaseWithoutSync, phaseWithSync};
@@ -601,14 +602,11 @@ struct Loom : Module {
 			};
 			float_4 amp = (1.f / (float)(i + 1)) * (splitMode ? 2.f * harmonicAmplitudes[i] : harmonicAmplitudes[i]);
 			float_4 splitAmp = simd::ifelse(simd::movemaskInverse<float_4>(splitMode ? 0b1100 : 0), 0.9f, 1.f);
+
 			// [0] = sin without sync, [1] = sin with sync, [2] = cos without sync, [3] = cos with sync
 			auto packedVals = sin2pi_pade_05_5_4(packedPhases - simd::floor(packedPhases)) * amp * splitAmp;
-			if (i == 0) {
-				mainOutsPacked = packedVals;
-			} else {
-				int harmSplitMask = splitMode ? ((i & 1) ? 0b0011 : 0b1100) : 0b1111;
-				mainOutsPacked += simd::ifelse(simd::movemaskInverse<float_4>(harmSplitMask), packedVals, 0.f);
-			}
+			int harmSplitMask = (splitMode && i) ? ((i & 1) ? 0b0011 : 0b1100) : 0b1111;
+			mainOutsPacked += simd::ifelse(simd::movemaskInverse<float_4>(harmSplitMask), packedVals, 0.f);
 		}
 
 		// TODO: fully implement fundamental and square
@@ -619,12 +617,18 @@ struct Loom : Module {
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
 
 		// TODO: normalize main outs a bit based on harmonic sum (maybe smart sum based on even vs. odd?)
-		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		mainOutsPacked = 5.f * Loom::drive(mainOutsPacked, drive);
 
-		// TODO: blep
+		// BLEP
+		if (doSync) {
+			float out1Disc = mainOutsPacked[1] - mainOutsPacked[0];
+			float out2Disc = mainOutsPacked[3] - mainOutsPacked[2];
+			this->out1Blep.insertDiscontinuity(anySyncCrossingSamplesAgo, out1Disc);
+			this->out2Blep.insertDiscontinuity(anySyncCrossingSamplesAgo, out2Disc);
+		}
 
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * (mainOutsPacked[1] + this->out1Blep.process()));
-		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * (mainOutsPacked[3] + this->out2Blep.process()));
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(mainOutsPacked[1] + this->out1Blep.process());
+		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(mainOutsPacked[3] + this->out2Blep.process());
 		outputs[SQUARE_OUTPUT].setVoltage(5.f * (squareOut +  this->squareBlep.process()));
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * (fundOut + this->fundBlep.process()));
 
