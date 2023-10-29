@@ -487,7 +487,8 @@ struct Loom : Module {
 		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
 		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
 			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
-		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
+		bool continuousStrideModeChanged = continuousStrideMode != this->lastContinuousStrideMode;
+		this->lastContinuousStrideMode = continuousStrideMode;
 		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
 		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
 
@@ -561,12 +562,14 @@ struct Loom : Module {
 		float_4 mainOutsPacked = 0.f;
 
 		// Calculate fundamental sync for non-free continuous stride
-		float fundSyncCrossingSamplesAgo = (this->phaseAccumulators[0] + phaseInc) - 1.f;
-		float fundSyncPhase = (1.f - fundSyncCrossingSamplesAgo) * phaseInc;
-		bool fundSync = fundSyncCrossingSamplesAgo > 0.f;
+		float fundPhaseWrapped = this->phaseAccumulators[0] + phaseInc - 1.f;
+		bool fundSync = fundPhaseWrapped >= 0.f;
+		float fundSyncCrossingSamplesAgo = fundPhaseWrapped / phaseInc;
+		float fundSyncPhase = this->phaseAccumulators[0];
 
 		// Arbitrary sample crossing in between samples for mode change sync
-		float modeChangeSamplesAgo, modeChangeSyncPhase = 0.5f;
+		float modeChangeSyncSamplesAgo = 0.5f;
+		float modeChangeSyncPhase = 0.5f * phaseInc;
 
 		for (int i = 0; i < 128; i++) {
 			float phaseWithoutSync, phaseWithSync;
@@ -574,11 +577,11 @@ struct Loom : Module {
 
 			// 3 types of sync that can introduce discontinuities
 			if (continuousStrideModeChanged || lfoModeChanged) {
-				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
+				phaseWithSync = modeChangeSyncPhase * harmonicMultiples[i];
 			} else if (sync) {
 				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
 			} else if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0 && fundSync) {
-				phaseWithSync = normalSyncPhase * harmonicMultiples[i];
+				phaseWithSync = fundSyncPhase * harmonicMultiples[i];
 			}
 
 			phaseWithoutSync -= std::floor(phaseWithoutSync);
@@ -608,7 +611,9 @@ struct Loom : Module {
 			}
 		}
 
-		// TODO: do fundamental and square
+		// TODO: fully implement fundamental and square
+		fundOut = sin2pi_pade_05_5_4(this->phaseAccumulators[0]);
+		squareOut = simd::ifelse(this->phaseAccumulators[0] < 0.5f, 1.f, -1.f);
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
