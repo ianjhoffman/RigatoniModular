@@ -192,6 +192,7 @@ struct Loom : Module {
 
 		// Set up everything pre-cached/pre-allocated
 		this->populatePatternTable();
+		this->populateHarmonicSplitMasks();
 		this->phaseAccumulators.fill(0.f);
 	}
 
@@ -209,6 +210,7 @@ struct Loom : Module {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
+	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep, out2Blep, squareBlep, fundBlep;
 	dsp::ClockDivider lightDivider;
 	float lastFundPhase{0.f}, lastSquare{0.f}, lastSync{0.f};
@@ -277,8 +279,20 @@ struct Loom : Module {
 		}
 	}
 
+	void populateHarmonicSplitMasks() {
+		// 0 = Split mode not active
+		this->harmonicSplitMasks[0].fill(simd::movemaskInverse<float_4>(0b1111));
+
+		// 1 = Split mode active, odd harmonics
+		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b1010));
+
+		// 2 = Split mode active, even harmonics (still include fundamental)
+		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b0101));
+		this->harmonicSplitMasks[1][0] = simd::movemaskInverse<float_4>(0b1101);
+	}
+
 	int setAmplitudesAndMultiples(
-		std::array<float, 64> &amplitudes,
+		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
 		float length, // 1-64
 		float density, // 0-1
@@ -305,7 +319,9 @@ struct Loom : Module {
 
 			auto pattern = this->patternTable[iLength - 1][iDensity];
 			for (int i = 0; i < iLength; i++) {
-				amplitudes[i] = pattern[(iShift + i) % iLength];
+				int off = i >> 2;
+				int idx = i & 0b11;
+				amplitudes[off][idx] = pattern[(iShift + i) % iLength];
 			}
 
 			return iLength;
@@ -349,7 +365,10 @@ struct Loom : Module {
 					lowDens[highShiftIdx], highDens[highShiftIdx]
 				};
 				highAmp *= fader * lengthFade;
-				amplitudes[i] = highAmp[0] + highAmp[1] + highAmp[2] + highAmp[3];
+
+				int off = i >> 2;
+				int idx = i & 0b11;
+				amplitudes[off][idx] = (highAmp[0] + highAmp[1] + highAmp[2] + highAmp[3]) / (i + 1);
 			}
 		}
 
@@ -385,7 +404,10 @@ struct Loom : Module {
 					lowDens[highShiftIdx], highDens[highShiftIdx]
 				};
 				lowAmp *= fader * (1.f - lengthFade);
-				amplitudes[i] += lowAmp[0] + lowAmp[1] + lowAmp[2] + lowAmp[3];
+
+				int off = i >> 2;
+				int idx = i & 0b11;
+				amplitudes[off][idx] += (lowAmp[0] + lowAmp[1] + lowAmp[2] + lowAmp[3]) / (i + 1);
 			}
 		}
 
@@ -500,7 +522,7 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Actually do partial amplitude/frequency calculations
-		std::array<float, 64> harmonicAmplitudes;
+		std::array<float_4, 16> harmonicAmplitudes;
 		std::array<float_4, 16> harmonicMultiples;
 		int numHarmonics = this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, length,
@@ -513,11 +535,11 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
+		//Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
-			harmonicAmplitudes[0] = std::max(harmonicAmplitudes[0], .5f);
+			harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], .5f);
 		}
 
 		// Calculate fundamental frequency in Hz
@@ -544,7 +566,6 @@ struct Loom : Module {
 		float phaseInc = freq * args.sampleTime;
 		float normalSyncPhase = (1.f - syncCrossingSamplesAgo) * phaseInc;
 		float fundOut = 0.f, fundOutSync = 0.f, squareOut = 0.f, squareOutSync = 0.f;
-		float_4 mainOutsPacked = 0.f;
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccum = this->phaseAccumulators[0][0];
@@ -571,37 +592,64 @@ struct Loom : Module {
 			doSync = false;
 		}
 
-		std::array<float_4, 16> phasesWithoutSync;
-		std::array<float_4, 16> phasesWithSync;
+		std::array<float_4, 16> sinWithoutSync;
+		std::array<float_4, 16> sinWithSync;
+		std::array<float_4, 16> cosWithoutSync;
+		std::array<float_4, 16> cosWithSync;
+		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
+		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
+		float_4 sinWithoutSyncSum, sinWithSyncSum, cosWithoutSyncSum, cosWithSyncSum = 0.f;
+		float_4 ampMult = (float)splitMode + 1.f;
 		for (int i = 0; i < 16; i++) {
-			phasesWithoutSync[i] = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
-			phasesWithoutSync[i] -= simd::floor(phasesWithoutSync[i]);
+			sinWithoutSync[i] = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
+			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
 			auto mask = simd::movemaskInverse<float_4>(doSync * 0b1111);
-			phasesWithSync[i] = simd::ifelse(mask, harmonicMultiples[i] * syncPhase, phasesWithoutSync[i]);
-			phasesWithSync[i] -= simd::floor(phasesWithSync[i]);
-			this->phaseAccumulators[i] = phasesWithSync[i];
+			sinWithSync[i] = simd::ifelse(mask, harmonicMultiples[i] * syncPhase, sinWithoutSync[i]);
+			sinWithSync[i] -= simd::floor(sinWithSync[i]);
+			this->phaseAccumulators[i] = sinWithSync[i]; // store before doing PM
+
+			// Phase modulation
+			cosWithoutSync[i] = sinWithoutSync[i] + (.25f + pmCv) * harmonicMultiples[i];
+			cosWithoutSync[i] -= simd::floor(cosWithoutSync[i]);
+
+			cosWithSync[i] = sinWithSync[i] + (.25f + pmCv) * harmonicMultiples[i];
+			cosWithSync[i] -= simd::floor(cosWithSync[i]);
+
+			sinWithoutSync[i] += (pmCv) * harmonicMultiples[i];
+			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
+
+			sinWithSync[i] += (pmCv) * harmonicMultiples[i];
+			sinWithSync[i] -= simd::floor(sinWithSync[i]);
+
+			// Calculate sin/cos with amplitudes, sum with output
+			sinWithoutSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+				sin2pi_pade_05_5_4(sinWithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				0.f
+			);
+			sinWithSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+				sin2pi_pade_05_5_4(sinWithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				0.f
+			);
+			cosWithoutSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+				sin2pi_pade_05_5_4(cosWithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				0.f
+			);
+			cosWithSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+				sin2pi_pade_05_5_4(cosWithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				0.f
+			);
 		}
 
-		for (int i = 0; i < numHarmonics; i++) {
-			int f4idx = i >> 2;
-			int idx = i & 0b11;
-			float harmonicMultiple = harmonicMultiples[f4idx][idx];
-			if (harmonicMultiple > harmonicMultipleLimit || harmonicAmplitudes[i] < 0.01f) continue;
-
-			float phaseWithoutSync = phasesWithoutSync[f4idx][idx];
-			float phaseWithSync = phasesWithSync[f4idx][idx];
-
-			float_4 packedPhases = {phaseWithoutSync, phaseWithSync, phaseWithoutSync, phaseWithSync};
-			float_4 packedPhaseOffsets = {pmCv, pmCv, (.25f + pmCv), (.25f + pmCv)};
-			packedPhases += packedPhaseOffsets * harmonicMultiple;
-			auto amp = ((float)splitMode + 1.f) * harmonicAmplitudes[i] / (float)(i + 1);
-			float_4 splitAmp = simd::ifelse(simd::movemaskInverse<float_4>(splitMode ? 0b1100 : 0), 0.9f, 1.f);
-
-			// [0] = sin without sync, [1] = sin with sync, [2] = cos without sync, [3] = cos with sync
-			auto packedVals = sin2pi_pade_05_5_4(packedPhases - simd::floor(packedPhases)) * amp * splitAmp;
-			int harmSplitMask = (splitMode && i) ? ((i & 1) ? 0b0011 : 0b1100) : 0b1111;
-			mainOutsPacked += simd::ifelse(simd::movemaskInverse<float_4>(harmSplitMask), packedVals, 0.f);
-		}
+		float_4 mainOutsPacked = {
+			sinWithoutSyncSum[0] + sinWithoutSyncSum[1] + sinWithoutSyncSum[2] + sinWithoutSyncSum[3],
+			sinWithSyncSum[0] + sinWithSyncSum[1] + sinWithSyncSum[2] + sinWithSyncSum[3],
+			cosWithoutSyncSum[0] + cosWithoutSyncSum[1] + cosWithoutSyncSum[2] + cosWithoutSyncSum[3],
+			cosWithSyncSum[0] + cosWithSyncSum[1] + cosWithSyncSum[2] + cosWithSyncSum[3]
+		};
 
 		// TODO: fully implement fundamental and square
 		fundAccum = this->phaseAccumulators[0][0];
