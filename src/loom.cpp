@@ -287,8 +287,8 @@ struct Loom : Module {
 		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b1010));
 
 		// 2 = Split mode active, even harmonics (still include fundamental)
-		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b0101));
-		this->harmonicSplitMasks[1][0] = simd::movemaskInverse<float_4>(0b1101);
+		this->harmonicSplitMasks[2].fill(simd::movemaskInverse<float_4>(0b0101));
+		this->harmonicSplitMasks[2][0] = simd::movemaskInverse<float_4>(0b1101);
 	}
 
 	int setAmplitudesAndMultiples(
@@ -321,7 +321,7 @@ struct Loom : Module {
 			for (int i = 0; i < iLength; i++) {
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] = pattern[(iShift + i) % iLength];
+				amplitudes[off][idx] = pattern[(iShift + i) % iLength] / (i + 1);
 			}
 
 			return iLength;
@@ -522,8 +522,8 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Actually do partial amplitude/frequency calculations
-		std::array<float_4, 16> harmonicAmplitudes;
-		std::array<float_4, 16> harmonicMultiples;
+		std::array<float_4, 16> harmonicAmplitudes{};
+		std::array<float_4, 16> harmonicMultiples{};
 		int numHarmonics = this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, length,
 			density, stride, shift, this->interpolate
@@ -535,6 +535,8 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
+
+		// TODO: implement this with SIMD
 		//Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
@@ -598,27 +600,27 @@ struct Loom : Module {
 		std::array<float_4, 16> cosWithSync;
 		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
 		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
+		auto syncMask = simd::movemaskInverse<float_4>(doSync ? 0b1111 : 0b0000);
 		float_4 sinWithoutSyncSum, sinWithSyncSum, cosWithoutSyncSum, cosWithSyncSum = 0.f;
 		float_4 ampMult = (float)splitMode + 1.f;
 		for (int i = 0; i < 16; i++) {
-			sinWithoutSync[i] = this->phaseAccumulators[i] + phaseInc * harmonicMultiples[i];
+			sinWithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
 			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
-			auto mask = simd::movemaskInverse<float_4>(doSync * 0b1111);
-			sinWithSync[i] = simd::ifelse(mask, harmonicMultiples[i] * syncPhase, sinWithoutSync[i]);
+			sinWithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, sinWithoutSync[i]);
 			sinWithSync[i] -= simd::floor(sinWithSync[i]);
 			this->phaseAccumulators[i] = sinWithSync[i]; // store before doing PM
 
 			// Phase modulation
-			cosWithoutSync[i] = sinWithoutSync[i] + (.25f + pmCv) * harmonicMultiples[i];
+			cosWithoutSync[i] = sinWithoutSync[i] + ((.25f + pmCv) * harmonicMultiples[i]);
 			cosWithoutSync[i] -= simd::floor(cosWithoutSync[i]);
 
-			cosWithSync[i] = sinWithSync[i] + (.25f + pmCv) * harmonicMultiples[i];
+			cosWithSync[i] = sinWithSync[i] + ((.25f + pmCv) * harmonicMultiples[i]);
 			cosWithSync[i] -= simd::floor(cosWithSync[i]);
 
-			sinWithoutSync[i] += (pmCv) * harmonicMultiples[i];
+			sinWithoutSync[i] += (pmCv * harmonicMultiples[i]);
 			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
 
-			sinWithSync[i] += (pmCv) * harmonicMultiples[i];
+			sinWithSync[i] += (pmCv * harmonicMultiples[i]);
 			sinWithSync[i] -= simd::floor(sinWithSync[i]);
 
 			// Calculate sin/cos with amplitudes, sum with output
