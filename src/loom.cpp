@@ -294,21 +294,22 @@ struct Loom : Module {
 	int setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
+		float harmonicMultipleLimit,
 		float length, // 1-64
 		float density, // 0-1
 		float stride, // 0-4
 		float shift, // 0-1
 		bool interpolate
 	) {
+		int harmonicLimit = 64;
 		// Always calculate all frequency multiples so everything stays aligned
-		for (int i = 0; i < 16; i++) {
-			int offset = i << 2;
-			multiples[i] = {
-				1.f + (offset + 0) * stride,
-				1.f + (offset + 1) * stride,
-				1.f + (offset + 2) * stride,
-				1.f + (offset + 3) * stride
-			};
+		for (int i = 0; i < 64; i++) {
+			int offset = i >> 2;
+			int idx = i & 0b11;
+			float mult = 1.f + i * stride;
+			multiples[offset][idx] = mult;
+
+			harmonicLimit = (i < harmonicLimit && mult > harmonicMultipleLimit) ? i : harmonicLimit;
 		}
 
 		// TODO: make this cut off harmonics over threshold
@@ -359,7 +360,8 @@ struct Loom : Module {
 			// Do blending
 			auto lowDens = this->patternTable[iLengthHigh - 1][iDensityLow];
 			auto highDens = this->patternTable[iLengthHigh - 1][iDensityHigh];
-			for (int i = 0; i < iLengthHigh; i++) {
+			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthHigh);
+			for (int i = 0; i < numHarmonicsToCalculate; i++) {
 				int highShiftIdx = (i + iShiftHigh) % iLengthHigh;
 				int lowShiftIdx = (i + iShiftLow) % iLengthHigh;
 				float_4 highAmp = {
@@ -398,7 +400,8 @@ struct Loom : Module {
 			// Do blending
 			auto lowDens = this->patternTable[iLengthLow - 1][iDensityLow];
 			auto highDens = this->patternTable[iLengthLow - 1][iDensityHigh];
-			for (int i = 0; i < iLengthLow; i++) {
+			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthLow);
+			for (int i = 0; i < numHarmonicsToCalculate; i++) {
 				int highShiftIdx = (i + iShiftHigh) % iLengthLow;
 				int lowShiftIdx = (i + iShiftLow) % iLengthLow;
 				float_4 lowAmp = {
@@ -430,6 +433,7 @@ struct Loom : Module {
 		float pivot,
 		float intensity
 	) {
+		// TODO: make this not break harmonic multiple limit anti-aliasing?
 		float cubicPivot = dsp::cubic(pivot);
 		float pivotHarm = cubicPivot * (length - 1.f);
 		auto slopes = Loom::calculatePivotSlopes(tilt);
@@ -526,12 +530,27 @@ struct Loom : Module {
 		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
 		shift = clamp(shift);
 
+		// Calculate fundamental frequency in Hz
+		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		bool lfoModeChanged = newLfoMode != this->lfoMode;
+		this->lfoMode = newLfoMode;
+		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
+		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage(), -5.f, 5.f);
+		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
+		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
+		float pitchCv = inputs[PITCH_INPUT].getVoltage();
+		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
+
+		// Some simple built-in band-limiting (not perfect because of
+		// drive, fm, pm, all of which can introduce extra harmonics)
+		float harmonicMultipleLimit = (args.sampleRate / (2.f * freq)) - 1.f;
+
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
 		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, length,
-			density, stride, shift, this->interpolate
+			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit,
+			length, density, stride, shift, this->interpolate
 		);
 
 		// Spectral shaping
@@ -546,17 +565,6 @@ struct Loom : Module {
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
 			harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], .5f);
 		}
-
-		// Calculate fundamental frequency in Hz
-		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
-		bool lfoModeChanged = newLfoMode != this->lfoMode;
-		this->lfoMode = newLfoMode;
-		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
-		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage(), -5.f, 5.f);
-		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
-		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
-		float pitchCv = inputs[PITCH_INPUT].getVoltage();
-		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
 
 		// Calculate sync
 		float syncIn = inputs[SYNC_INPUT].getVoltage();
@@ -577,10 +585,6 @@ struct Loom : Module {
 		float fundAccum = this->phaseAccumulators[0][0];
 		float fundPhaseWrapped = fundAccum + phaseInc - 1.f;
 		bool fundSync = fundPhaseWrapped >= 0.f;
-
-		// Some simple built-in band-limiting
-		// (not perfect because of drive feature, which can introduce extra harmonics)
-		float harmonicMultipleLimit = (args.sampleRate / (2.f * freq)) - 1.f;
 
 		// Calculate this outside the loop to get rid of a bunch of branching
 		// 3 types of sync that can introduce discontinuities
@@ -672,8 +676,6 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-
-		// TODO: normalize main outs a bit based on harmonic sum (maybe smart sum based on even vs. odd?)
 		mainOutsPacked = 5.f * Loom::drive(mainOutsPacked, drive);
 
 		// BLEP
