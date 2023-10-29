@@ -284,11 +284,11 @@ struct Loom : Module {
 		this->harmonicSplitMasks[0].fill(simd::movemaskInverse<float_4>(0b1111));
 
 		// 1 = Split mode active, odd harmonics
-		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b1010));
+		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b0101));
 
 		// 2 = Split mode active, even harmonics (still include fundamental)
-		this->harmonicSplitMasks[2].fill(simd::movemaskInverse<float_4>(0b0101));
-		this->harmonicSplitMasks[2][0] = simd::movemaskInverse<float_4>(0b1101);
+		this->harmonicSplitMasks[2].fill(simd::movemaskInverse<float_4>(0b1010));
+		this->harmonicSplitMasks[2][0] = simd::movemaskInverse<float_4>(0b1011);
 	}
 
 	int setAmplitudesAndMultiples(
@@ -563,8 +563,9 @@ struct Loom : Module {
 
 		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
-		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
-		pmCv -= std::floor(pmCv);
+		float phaseOffset = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
+		phaseOffset -= std::floor(phaseOffset);
+		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
 		float normalSyncPhase = (1.f - syncCrossingSamplesAgo) * phaseInc;
 		float fundOut = 0.f, fundOutSync = 0.f, squareOut = 0.f, squareOutSync = 0.f;
@@ -594,63 +595,71 @@ struct Loom : Module {
 			doSync = false;
 		}
 
-		std::array<float_4, 16> sinWithoutSync;
-		std::array<float_4, 16> sinWithSync;
-		std::array<float_4, 16> cosWithoutSync;
-		std::array<float_4, 16> cosWithSync;
+		std::array<float_4, 16> out1WithoutSync;
+		std::array<float_4, 16> out1WithSync;
+		std::array<float_4, 16> out2WithoutSync;
+		std::array<float_4, 16> out2WithSync;
 		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
 		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
 		auto syncMask = simd::movemaskInverse<float_4>(doSync ? 0b1111 : 0b0000);
-		float_4 sinWithoutSyncSum, sinWithSyncSum, cosWithoutSyncSum, cosWithSyncSum = 0.f;
+		auto cosPhaseMask = simd::movemaskInverse<float_4>(splitMode ? 0b0000 : 0b1111);
+		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
 		float_4 ampMult = (float)splitMode + 1.f;
 		for (int i = 0; i < 16; i++) {
-			sinWithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
-			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
-			sinWithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, sinWithoutSync[i]);
-			sinWithSync[i] -= simd::floor(sinWithSync[i]);
-			this->phaseAccumulators[i] = sinWithSync[i]; // store before doing PM
+			out1WithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
+			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
+			out1WithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, out1WithoutSync[i]);
+			out1WithSync[i] -= simd::floor(out1WithSync[i]);
+			this->phaseAccumulators[i] = out1WithSync[i]; // store before doing PM
 
 			// Phase modulation
-			cosWithoutSync[i] = sinWithoutSync[i] + ((.25f + pmCv) * harmonicMultiples[i]);
-			cosWithoutSync[i] -= simd::floor(cosWithoutSync[i]);
+			out2WithoutSync[i] = out1WithoutSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
 
-			cosWithSync[i] = sinWithSync[i] + ((.25f + pmCv) * harmonicMultiples[i]);
-			cosWithSync[i] -= simd::floor(cosWithSync[i]);
+			out2WithSync[i] = out1WithSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithSync[i] -= simd::floor(out2WithSync[i]);
 
-			sinWithoutSync[i] += (pmCv * harmonicMultiples[i]);
-			sinWithoutSync[i] -= simd::floor(sinWithoutSync[i]);
+			out1WithoutSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
 
-			sinWithSync[i] += (pmCv * harmonicMultiples[i]);
-			sinWithSync[i] -= simd::floor(sinWithSync[i]);
+			out1WithSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithSync[i] -= simd::floor(out1WithSync[i]);
+
+			// Output 2 doesn't use cosine phase partials in odd/even split mode
+			out2WithoutSync[i] = simd::ifelse(cosPhaseMask, out2WithoutSync[i], out1WithoutSync[i]);
+			out2WithSync[i] = simd::ifelse(cosPhaseMask, out2WithSync[i], out1WithSync[i]);
 
 			// Calculate sin/cos with amplitudes, sum with output
-			sinWithoutSyncSum += simd::ifelse(
+			out1WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(sinWithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out1WithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
 				0.f
 			);
-			sinWithSyncSum += simd::ifelse(
+
+			out1WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(sinWithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out1WithSync[i]) * harmonicAmplitudes[i] * ampMult,
 				0.f
 			);
-			cosWithoutSyncSum += simd::ifelse(
+
+			out2WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(cosWithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out2WithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
 				0.f
 			);
-			cosWithSyncSum += simd::ifelse(
+
+			out2WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(cosWithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out2WithSync[i]) * harmonicAmplitudes[i] * ampMult,
 				0.f
 			);
 		}
 
 		float_4 mainOutsPacked = {
-			sinWithoutSyncSum[0] + sinWithoutSyncSum[1] + sinWithoutSyncSum[2] + sinWithoutSyncSum[3],
-			sinWithSyncSum[0] + sinWithSyncSum[1] + sinWithSyncSum[2] + sinWithSyncSum[3],
-			cosWithoutSyncSum[0] + cosWithoutSyncSum[1] + cosWithoutSyncSum[2] + cosWithoutSyncSum[3],
-			cosWithSyncSum[0] + cosWithSyncSum[1] + cosWithSyncSum[2] + cosWithSyncSum[3]
+			out1WithoutSyncSum[0] + out1WithoutSyncSum[1] + out1WithoutSyncSum[2] + out1WithoutSyncSum[3],
+			out1WithSyncSum[0] + out1WithSyncSum[1] + out1WithSyncSum[2] + out1WithSyncSum[3],
+			out2WithoutSyncSum[0] + out2WithoutSyncSum[1] + out2WithoutSyncSum[2] + out2WithoutSyncSum[3],
+			out2WithSyncSum[0] + out2WithSyncSum[1] + out2WithSyncSum[2] + out2WithSyncSum[3]
 		};
 
 		// TODO: fully implement fundamental and square
