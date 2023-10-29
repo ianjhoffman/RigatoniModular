@@ -294,6 +294,7 @@ struct Loom : Module {
 	int setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
+		std::array<float_4, 16> &onStates,
 		float harmonicMultipleLimit,
 		float length, // 1-64
 		float density, // 0-1
@@ -308,6 +309,7 @@ struct Loom : Module {
 			int idx = i & 0b11;
 			float mult = 1.f + i * stride;
 			multiples[offset][idx] = mult;
+			onStates[offset][idx] = (float)(mult <= harmonicMultipleLimit);
 
 			harmonicLimit = (i < harmonicLimit && mult > harmonicMultipleLimit) ? i : harmonicLimit;
 		}
@@ -420,40 +422,41 @@ struct Loom : Module {
 	}
 
 	static std::tuple<float, float, float> calculatePivotSlopes(int tilt) {
-		if (tilt == 0) return {0.f, -1.f, 1.f};
-		if (tilt == 1) return {-1.5f, -1.5f, 1.5f};
-		return {-1.f, 0.f, 1.f};
+		if (tilt == 0) return {0.1f, -2.f, 0.f};
+		if (tilt == 1) return {-3.f, -3.f, .15f};
+		return {-2.f, 0.1f, 0.f};
 	}
 
 	static void shapeAmplitudes(
 		std::array<float_4, 16> &amplitudes,
+		std::array<float_4, 16> &onStates,
 		std::array<float, 5> &ledIndicators,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
 		float intensity
 	) {
-		// TODO: make this not break harmonic multiple limit anti-aliasing?
 		float cubicPivot = dsp::cubic(pivot);
-		float pivotHarm = cubicPivot * (length - 1.f);
+		float pivotHarm = cubicPivot * 63;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 2.f) : (4.f * intensity - 1.f);
-		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
-		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
-		float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
+		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float pivotBase = crossfade(0.f, std::get<2>(slopes), clamp(intensity * 2.f));
 		float_4 indices = {0.f, 1.f, 2.f, 3.f};
 		for (int i = 0; i < 16; i++) {
 			float_4 diffs = pivotHarm - indices;
 			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
-			auto amp = amplitudes[i] * (pivotMultiplier + slopes * simd::abs(diffs));
-			amplitudes[i] = clamp(amp, 0.f, 2.f); // No negative amplitudes
+			auto toAdd = onStates[i] * (pivotBase + slopes * simd::abs(diffs));
+			amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 			indices += 4.f;
 		}
 
 		// LED indicators
 		for (int i = 0; i < 5; i++) {
-			float diff = pivotHarm - ((length - 1.f) * (0.25f * (float)i));
-			ledIndicators[i] = clamp((2.f/3.f) * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff)));
+			// Always use max harmonic length for LED display
+			float diff = pivotHarm - (63 * (0.25f * (float)i));
+			ledIndicators[i] = clamp(4.f * (pivotBase + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff)));
 		}
 	}
 
@@ -548,9 +551,10 @@ struct Loom : Module {
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
+		std::array<float_4, 16> onStates{};
 		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit,
-			length, density, stride, shift, this->interpolate
+			harmonicAmplitudes, harmonicMultiples, onStates,
+			harmonicMultipleLimit, length, density, stride, shift, this->interpolate
 		);
 
 		// Spectral shaping
@@ -559,7 +563,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
