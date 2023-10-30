@@ -6,12 +6,33 @@
 #include <tuple>
 #include <utility>
 
-// From VCV Fundamental VCO module
-template <typename T>
-T sin2pi_pade_05_5_4(T x) {
-	x -= 0.5f;
-	return (T(-6.283185307) * x + T(33.19863968) * simd::pow(x, 3) - T(32.44191367) * simd::pow(x, 5))
-	       / (1 + T(1.296008659) * simd::pow(x, 2) + T(0.7028072946) * simd::pow(x, 4));
+using simd::float_4;
+
+// https://web.archive.org/web/20200628195036/http://mooooo.ooo/chebyshev-sine-approximation/
+// Thanks to Colin Wallace for doing some great math
+const float_4 CHEBYSHEV_COEFFS[6] = {
+	float_4(-3.1415926444234477f),   // x
+	float_4(2.0261194642649887f),    // x^3
+	float_4(-0.5240361513980939f),   // x^5
+	float_4(0.0751872634325299f),    // x^7
+	float_4(-0.006860187425683514f), // x^9
+	float_4(0.000385937753182769f),  // x^11
+};
+
+float_4 sin2pi_chebyshev(float_4 x) {
+	x = (x * 2.f) - 1.f;
+	auto x2 = x * x;
+    auto p11 = CHEBYSHEV_COEFFS[5];
+    auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
+    auto p7 = p9 * x2  + CHEBYSHEV_COEFFS[3];
+    auto p5 = p7 * x2  + CHEBYSHEV_COEFFS[2];
+    auto p3 = p5 * x2  + CHEBYSHEV_COEFFS[1];
+    auto p1 = p3 * x2  + CHEBYSHEV_COEFFS[0];
+    return (x - 1.f) * (x + 1.f) * p1 * x;
+}
+
+inline float sum_float4(float_4 x) {
+	return x[0] + x[1] + x[2] + x[3];
 }
 
 struct Loom : Module {
@@ -71,6 +92,9 @@ struct Loom : Module {
 		S_LED_3_LIGHT,
 		S_LED_4_LIGHT,
 		S_LED_5_LIGHT,
+		S_LED_6_LIGHT,
+		S_LED_7_LIGHT,
+		S_LED_8_LIGHT,
 		STRIDE_1_LIGHT,
 		LIGHTS_LEN
 	};
@@ -190,26 +214,37 @@ struct Loom : Module {
 
 		// Set up everything pre-cached/pre-allocated
 		this->populatePatternTable();
+		this->populateHarmonicSplitMasks();
+		this->calculateBaseAmplitudes();
 		this->phaseAccumulators.fill(0.f);
 	}
 
 	// Having this around makes it easier to calculate partial amplitudes from our bitmasks
-	static constexpr uint64_t AMP_MASK = 0x8000000000000000;
+	static constexpr uint64_t AMP_MASK = 0x000000000000000f;
+	static constexpr int AMP_SHIFT = 60;
 	static constexpr float LFO_MULTIPLIER = .05f;
 	static constexpr float VCO_MULTIPLIER = 20.f;
 	static constexpr float LIN_FM_FACTOR = 5.f;
 	static constexpr float MAX_FREQ = 10240.f;
-	static constexpr float SLOPE_SCALE = 0.0025f;
+	static constexpr float SLOPE_SCALE = 0.01f;
 
 	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
 
+	// Masks for shifting sequences of each length
+	std::array<uint64_t, 64> lengthMasks;
+
+	// Masks for which harmonics go to which output, based on output mode
+	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
+
+	// Precalculated amplitude multipliers per harmonic to avoid lots of divisions during runtime
+	std::array<float_4, 16> baseAmplitudes;
+
 	// Synthesis parameters
-	std::array<float, 128> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float> out1Blep;
-	dsp::MinBlepGenerator<16, 16, float> out2Blep;
-	dsp::MinBlepGenerator<16, 16, float> squareBlep;
+	std::array<float_4, 16> phaseAccumulators;
+	dsp::MinBlepGenerator<16, 16, float_4> blep;
 	dsp::ClockDivider lightDivider;
+	float lastSync{0.f};
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
 	// For custom knob displays to read
@@ -218,16 +253,15 @@ struct Loom : Module {
 	bool interpolate{true};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
-	static int uint64_log2(uint64_t n) {
+	static int numRelevantBits(uint64_t n) {
+		if (n == 0) return 1;
 		#define S(k) if (n >= (UINT64_C(1) << k)) { i += k; n >>= k; }
-		int i = -(n == 0); S(32); S(16); S(8); S(4); S(2); S(1); return i;
+		int i = -(n == 0); S(32); S(16); S(8); S(4); S(2); S(1); return i + 1;
 		#undef S
 	}
 
-	// Turn patterns into bigger patterns using this one weird trick! CPUs HATE him!
-	static uint64_t concatenateBitmasks(uint64_t a, uint64_t b) {
-		auto shiftAmount = (b > 1) ? Loom::uint64_log2(b) + 1 : 1;
-		return (a << shiftAmount) | b;
+	inline static uint64_t concatenateBitmasks(uint64_t a, uint64_t b) {
+		return (a << Loom::numRelevantBits(b)) | b;
 	}
 
 	// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
@@ -271,213 +305,250 @@ struct Loom : Module {
 	void populatePatternTable() {
 		for (int length = 1; length <= 64; length++) {
 			for (int density = 1; density <= length; density++) {
-				patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
+				this->patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
 			}
+			this->lengthMasks[length - 1] = 0xffffffffffffffff << (64 - length);
 		}
 	}
 
-	static uint64_t shiftPattern(uint64_t pattern, int shift, int length) {
-		return (pattern >> shift) | (pattern << (length - shift));
+	// Swap order of every 4-bit chunk
+	inline static uint64_t flipNibbleEndian(uint64_t a) {
+		uint64_t out = (a & 0x8888888888888888) >> 3; // 3 to 0
+		out |= (a & 0x1111111111111111) << 3; // 0 to 3
+		out |= (a & 0x4444444444444444) >> 1; // 2 to 1
+		out |= (a & 0x2222222222222222) << 1; // 1 to 2
+		return out;
 	}
 
-	int setAmplitudesAndMultiples(
-		std::array<float, 128> &amplitudes,
-		std::array<float, 128> &multiples,
-		float length, // 1-128
+	inline uint64_t getShiftedPattern(uint64_t mask, int length, int density, int shift) {
+		auto pattern = mask & this->patternTable[length - 1][density];
+		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
+		return Loom::flipNibbleEndian(shifted);
+	}
+
+	void populateHarmonicSplitMasks() {
+		// 0 = Split mode not active
+		this->harmonicSplitMasks[0].fill(simd::movemaskInverse<float_4>(0b1111));
+
+		// 1 = Split mode active, odd harmonics
+		this->harmonicSplitMasks[1].fill(simd::movemaskInverse<float_4>(0b0101));
+
+		// 2 = Split mode active, even harmonics (still include fundamental)
+		this->harmonicSplitMasks[2].fill(simd::movemaskInverse<float_4>(0b1010));
+		this->harmonicSplitMasks[2][0] = simd::movemaskInverse<float_4>(0b1011);
+	}
+
+	void calculateBaseAmplitudes() {
+		for (int i = 0; i < 64; i++) {
+			int idx = i >> 2;
+			int offset = i & 0b11;
+			this->baseAmplitudes[idx][offset] = 1.f / (i + 1);
+		}
+	}
+
+	uint64_t setAmplitudesAndMultiples(
+		std::array<float_4, 16> &amplitudes,
+		std::array<float_4, 16> &multiples,
+		float harmonicMultipleLimit,
+		float length, // 1-64
 		float density, // 0-1
 		float stride, // 0-4
 		float shift, // 0-1
 		bool interpolate
 	) {
-		// Always calculate all frequency multiples so everything stays aligned
-		for (int i = 0; i < 128; i++) {
-			multiples[i] = 1.f + i * stride;
+		// Frequency multiple calculations
+		float_4 indices = {0.f, 1.f, 2.f, 3.f};
+		for (int i = 0; i < 16; i++) {
+			multiples[i] = 1.f + (indices * stride);
+			indices += 4.f;
 		}
+
+		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
+		int harmonicLimit = harmonicMultipleLimit / std::fmax(stride, 0.1f);
+		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
+
+		int iLengthLow = (int)std::floor(length);
+		int iLengthHigh = std::min(iLengthLow + 1, 64);
+		int numBlocks = 0b1 | ((std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2);
 
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
-			int clampedLength = std::min(iLength, 64);
-			int iDensity = (int)std::round(density * (clampedLength - 1));
-			int iShift = (int)std::round(shift * (clampedLength - 1));
+			int lengthIdx = iLength - 1;
+			int iDensity = (int)std::round(density * lengthIdx);
+			int iShift = (int)std::round(shift * lengthIdx);
 
-			auto pattern = Loom::shiftPattern(this->patternTable[clampedLength - 1][iDensity], iShift, clampedLength);
-			auto shiftPattern = pattern;
-			for (int i = 0; i < iLength; i++) {
-				if (i == 64) shiftPattern = pattern; // Wrap pattern for partial counts >64
-				amplitudes[i] = (shiftPattern & AMP_MASK) ? 1.f : 0.f;
-				shiftPattern <<= 1;
+			auto pattern = this->getShiftedPattern(harmonicMask, iLength, iDensity, iShift);
+			for (int i = 0; i < numBlocks; i++) {
+				auto ampMask = simd::movemaskInverse<float_4>((pattern >> Loom::AMP_SHIFT) & Loom::AMP_MASK);
+				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
+				pattern <<= 4;
 			}
 
-			return iLength;
+			return harmonicMask;
 		}
 
-		// Interpolation is a lot more complicated but we're essentially finding a point somewhere in the 3D pattern space
-		// Length is the "outer" variable in our 2x2x2 fade since it affects the scaling of density and shift
-		int iLengthLow = (int)std::floor(length);
-		int iLengthLowClamped = std::min(iLengthLow, 64);
-		int iLengthHigh = std::min(iLengthLow + 1, 128);
-		int iLengthHighClamped = std::min(iLengthHigh, 64);
 		float lengthFade = length - iLengthLow;
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
 		{
+			int lengthIdx = iLengthHigh - 1;
+
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthHighClamped - 1);
+			float fDensity = density * lengthIdx;
 			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = iDensityLow + 1;
+			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthHighClamped - 1);
+			float fShift = shift * lengthIdx;
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
-			// Get 4 patterns
-			uint64_t lowLow, lowLowCached, lowHigh, lowHighCached, highLow, highLowCached, highHigh, highHighCached;
-			lowLow = lowLowCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityLow], iShiftLow, iLengthHighClamped);
-			lowHigh = lowHighCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityHigh], iShiftLow, iLengthHighClamped);
-			highLow = highLowCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityLow], iShiftHigh, iLengthHighClamped);
-			highHigh = highHighCached = Loom::shiftPattern(this->patternTable[iLengthHighClamped - 1][iDensityHigh], iShiftHigh, iLengthHighClamped);
+			float_4 fader = {
+				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
+				(1.f - densityFade) * shiftFade, // low density, high shift
+				densityFade * (1.f - shiftFade), // high density, low shift
+				densityFade * shiftFade // high density, high shift
+			};
+			fader *= lengthFade;
 
 			// Do blending
-			for (int i = 0; i < iLengthHigh; i++) {
-				if (i == 64) {
-					lowLow = lowLowCached;
-					lowHigh = lowHighCached;
-					highLow = highLowCached;
-					highHigh = highHighCached;
-				}
+			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftHigh);
+			auto shiftAmt = Loom::AMP_SHIFT;
+			for (int i = 0; i < numBlocks; i++) {
+				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+				auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & Loom::AMP_MASK);
+				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
 
-				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
-				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
-				amplitudes[i] = lengthFade * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
+				// Wish I could do a matrix multiplication here
+				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
+				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
+				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
+				amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
 
-				lowLow <<= 1;
-				lowHigh <<= 1;
-				highLow <<= 1;
-				highHigh <<= 1;
+				shiftAmt -= 4;
 			}
 		}
 
 		// Do low length
 		{
+			int lengthIdx = iLengthLow - 1;
+
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthLowClamped - 1);
+			float fDensity = density * lengthIdx;
 			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = iDensityLow + 1;
+			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthLowClamped - 1);
+			float fShift = shift * lengthIdx;
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
 
-			// Get 4 patterns
-			uint64_t lowLow, lowLowCached, lowHigh, lowHighCached, highLow, highLowCached, highHigh, highHighCached;
-			lowLow = lowLowCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityLow], iShiftLow, iLengthLowClamped);
-			lowHigh = lowHighCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityHigh], iShiftLow, iLengthLowClamped);
-			highLow = highLowCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityLow], iShiftHigh, iLengthLowClamped);
-			highHigh = highHighCached = Loom::shiftPattern(this->patternTable[iLengthLowClamped - 1][iDensityHigh], iShiftHigh, iLengthLowClamped);
+			float_4 fader = {
+				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
+				(1.f - densityFade) * shiftFade, // low density, high shift
+				densityFade * (1.f - shiftFade), // high density, low shift
+				densityFade * shiftFade // high density, high shift
+			};
+			fader *= (1.f - lengthFade);
 
 			// Do blending
-			for (int i = 0; i < iLengthLow; i++) {
-				if (i == 64) {
-					lowLow = lowLowCached;
-					lowHigh = lowHighCached;
-					highLow = highLowCached;
-					highHigh = highHighCached;
-				}
+			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftHigh);
+			auto shiftAmt = Loom::AMP_SHIFT;
+			for (int i = 0; i < numBlocks; i++) {
+				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+				auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & Loom::AMP_MASK);
+				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
 
-				float highShiftBlend = (1.f - densityFade) * (float)((highLow & AMP_MASK) != 0) + densityFade * (float)((highHigh & AMP_MASK) != 0);
-				float lowShiftBlend = (1.f - densityFade) * (float)((lowLow & AMP_MASK) != 0) + densityFade * (float)((lowHigh & AMP_MASK) != 0);
-				amplitudes[i] += (1.f - lengthFade) * ((1.f - shiftFade) * lowShiftBlend + shiftFade * highShiftBlend);
+				// Wish I could do a matrix multiplication here
+				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
+				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
+				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
+				amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
 
-				lowLow <<= 1;
-				lowHigh <<= 1;
-				highLow <<= 1;
-				highHigh <<= 1;
+				shiftAmt -= 4;
 			}
 		}
 
-		return iLengthHigh;
+		return harmonicMask;
 	}
 
-	static std::tuple<float, float, float> calculatePivotSlopes(int tilt) {
-		if (tilt == 0) return {0.f, -1.f, 1.f};
-		if (tilt == 1) return {-1.5f, -1.5f, 1.5f};
-		return {-1.f, 0.f, 1.f};
+	inline static std::pair<float, float> calculatePivotSlopes(int tilt) {
+		return (tilt == 0) ? std::make_pair(0.1f, -2.f)
+			: ((tilt == 1) ? std::make_pair(-3.f, -3.f)
+			: std::make_pair(-2.f, 0.1f));
 	}
 
 	static void shapeAmplitudes(
-		std::array<float, 128> &amplitudes,
-		std::array<float, 5> &ledIndicators,
+		std::array<float_4, 16> &amplitudes,
+		uint64_t harmonicMask,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
 		float intensity
 	) {
-		float cubicPivot = dsp::cubic(pivot);
-		float pivotHarm = cubicPivot * (length - 1.f);
+		float pivotHarm = Loom::scaleLength(pivot) - 1.f;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
-		float slopeMultiplier = (intensity < .5f) ? (intensity * 2.f) : (4.f * intensity - 1.f);
-		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
-		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier * length;
-		float pivotMultiplier = crossfade(1.f, std::get<2>(slopes), clamp(intensity * 2.f));
-		for (int i = 0; i < std::ceil(length); i++) {
-			float diff = pivotHarm - (float)i;
-			float amp = amplitudes[i] * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff));
-			amplitudes[i] = clamp(amp, 0.f, 2.f); // No negative amplitudes
-		}
+		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
+		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(intensity * 2.f));
+		float_4 indices = {0.f, 1.f, 2.f, 3.f};
+		auto shiftAmt = Loom::AMP_SHIFT;
+		harmonicMask = Loom::flipNibbleEndian(harmonicMask);
+		for (int i = 0; i < 16; i++) {
+			float_4 diffs = pivotHarm - indices;
+			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
+			auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & Loom::AMP_MASK);
+			auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(diffs), 0.f);
+			amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 
-		// LED indicators
-		for (int i = 0; i < 5; i++) {
-			float diff = pivotHarm - ((length - 1.f) * (0.25f * (float)i));
-			ledIndicators[i] = clamp((2.f/3.f) * (pivotMultiplier + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff)));
+			indices += 4.f;
+			shiftAmt -= 4;
 		}
 	}
 
 	static float scaleLength(float normalized) {
-		if (normalized >= 5.f/6.f) return 64.f * ((6.f * normalized) - 4.f);
-		if (normalized >= 4.f/6.f) return 32.f * ((6.f * normalized) - 3.f);
-		if (normalized >= 3.f/6.f) return 16.f * ((6.f * normalized) - 2.f);
-		if (normalized >= 2.f/6.f) return 8.f * ((6.f * normalized) - 1.f);
-		if (normalized >= 1.f/6.f) return 24.f * normalized;
-		return 1.f + 18.f * normalized;
+		auto pow = (normalized <= 0.2f) ? (10.f * normalized) : (5.f * normalized + 1.f);
+		return clamp(dsp::exp2_taylor5(pow), 1.f, 64.f);
 	}
 
 	static float scaleStrideKnobValue(float knob) {
-		if (knob <= 2.f/3.f) return (3.f/4.f) * knob;
-		return (1.5f * knob) - .5f;
+		return (knob <= 2.f/3.f) ? ((3.f/4.f) * knob) : ((1.5f * knob) - .5f);
 	}
 
 	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
-		if (expFm) {
-			coarse += fmCv;
-		}
-
+		coarse += expFm ? fmCv : 0.f;
 		float multiplier = lfoMode ? Loom::LFO_MULTIPLIER : Loom::VCO_MULTIPLIER;
 		float fineTuneMultiplier = dsp::exp2_taylor5(fine * (lfoMode ? 1.f : (7.f / 12.f)));
 		float freq = multiplier * fineTuneMultiplier * dsp::exp2_taylor5(coarse + pitchCv);
-
-		if (!expFm) {
-			freq += fmCv * multiplier * Loom::LIN_FM_FACTOR;
-		}
+		freq += expFm ? 0.f : fmCv * multiplier * Loom::LIN_FM_FACTOR;
 
 		// Clamp to max frequency, allow negative frequency for thru-zero linear FM
 		return std::min(freq, Loom::MAX_FREQ);
 	}
 
 	// Soft clipping (quadratic) drive with a small amount of wave folding at the extreme
-	static float drive(float in, float drive) {
+	static float_4 drive(float_4 in, float drive) {
 		// Don't hit the folder as hard, up to 12 o'clock on the drive knob should almost never clip
 		in *= drive * .5f;
-		float overThresh = std::abs(in) - .9f;
-		if (overThresh < 0.f) return in;
-		float subAmt = clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
-		return (in < 0.f) ? (in + subAmt) : (in - subAmt);
+		auto overThresh = simd::abs(in) - .9f;
+		auto underThreshMask = overThresh < 0.f;
+		auto subAmt = simd::clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
+		auto driven = simd::ifelse(in < 0.f, in + subAmt, in - subAmt);
+		return simd::ifelse(underThreshMask, in, driven);
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -485,7 +556,8 @@ struct Loom : Module {
 		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
 		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
 			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
-		bool continuousStrideModeChanged = continuousStrideMode != lastContinuousStrideMode;
+		bool continuousStrideModeChanged = continuousStrideMode != this->lastContinuousStrideMode;
+		this->lastContinuousStrideMode = continuousStrideMode;
 		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
 		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
 
@@ -511,27 +583,6 @@ struct Loom : Module {
 		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
 		shift = clamp(shift);
 
-		// Actually do partial amplitude/frequency calculations
-		std::array<float, 128> harmonicAmplitudes;
-		std::array<float, 128> harmonicMultiples;
-		int numHarmonics = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, length,
-			density, stride, shift, this->interpolate
-		);
-
-		// Spectral shaping
-		float pivot = clamp(params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage());
-		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
-		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
-		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
-		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
-		
-		// Fundamental boosting
-		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
-			harmonicAmplitudes[0] = std::max(harmonicAmplitudes[0], .5f);
-		}
-
 		// Calculate fundamental frequency in Hz
 		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
 		bool lfoModeChanged = newLfoMode != this->lfoMode;
@@ -543,81 +594,176 @@ struct Loom : Module {
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
 		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
 
-		// TODO: calculate sync
-		bool sync = false;
+		// Some simple built-in band-limiting (not perfect because of
+		// drive, fm, pm, all of which can introduce extra harmonics)
+		auto freq2Recip = simd::rcp(2.f * freq);
+		float harmonicMultipleLimit = args.sampleRate * freq2Recip[0] - 1.f;
 
+		// Actually do partial amplitude/frequency calculations
+		std::array<float_4, 16> harmonicAmplitudes{};
+		std::array<float_4, 16> harmonicMultiples{};
+		auto harmonicMask = this->setAmplitudesAndMultiples(
+			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift, this->interpolate
+		);
+
+		// Spectral shaping
+		float pivot = clamp(params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage());
+		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
+		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
+		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
+		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, length, tilt, pivot, intensity);
+		
+		// Fundamental boosting
+		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
+		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], boostFund ? .5f : 0.f);
+
+		// Calculate sync
+		float syncIn = inputs[SYNC_INPUT].getVoltage();
+		float syncCrossing = -this->lastSync / (syncIn - this->lastSync);
+		this->lastSync = syncIn;
+		bool sync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncIn >= 0.f);
+
+		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
-		float pmCv = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
-		pmCv -= std::floor(pmCv);
+		float phaseOffset = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
+		phaseOffset -= std::floor(phaseOffset);
+		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
-		float oddZeroOut = 0.f;
-		float evenNinetyOut = 0.f;
-		float fundOut = 0.f;
-		float squareOut = 0.f;
-		for (int i = 0; i < 128; i++) {
-			float harmonicPhaseAccum = this->phaseAccumulators[i];
-			if (continuousStrideModeChanged || lfoModeChanged || sync) {
-				harmonicPhaseAccum = 0.f;
-				// TODO: insert discontinuity into minblep
-			}
+		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
 
-			if (continuousStrideMode != ContinuousStrideMode::FREE && i > 0) {
-				harmonicPhaseAccum = this->phaseAccumulators[0] * harmonicMultiples[i];
-				// TODO: PM doesn't play nicely with synced stride mode
-				// TODO: insert discontinuity here at each cycle if we're in sync mode
-			} else {
-				harmonicPhaseAccum += phaseInc * harmonicMultiples[i];
-			}
+		// Calculate fundamental sync for non-free continuous stride
+		float fundAccum = this->phaseAccumulators[0][0];
+		float fundPhaseWrapped = fundAccum + phaseInc - 1.f;
+		bool fundSync = fundPhaseWrapped >= 0.f;
 
-			harmonicPhaseAccum -= std::floor(harmonicPhaseAccum);
-			this->phaseAccumulators[i] = harmonicPhaseAccum;
-
-			bool overNyquist = freq * harmonicMultiples[i] > args.sampleRate / 2;
-			if (overNyquist || i >= numHarmonics) continue;
-
-			float sinPhase = harmonicPhaseAccum + pmCv * harmonicMultiples[i];
-			float sinVal = sin2pi_pade_05_5_4(sinPhase - std::floor(sinPhase));
-			float cosPhase = harmonicPhaseAccum + (.25f + pmCv) * harmonicMultiples[i];
-			float cosVal = sin2pi_pade_05_5_4(cosPhase - std::floor(cosPhase));
-			float amp = (1.f / (float)(i + 1)) * (splitMode ? 2.f * harmonicAmplitudes[i] : harmonicAmplitudes[i]);
-			if (i == 0) {
-				oddZeroOut = amp * sinVal;
-				evenNinetyOut = splitMode ? 0.9f * amp * sinVal : amp * cosVal;
-				fundOut = sinVal;
-				squareOut = (harmonicPhaseAccum < .5f) ? 1.f : -1.f;
-				// TODO: insert discontinuity into minblep for square
-			} else {
-				oddZeroOut += splitMode ? ((i & 1) ? 0.f : amp * sinVal) : amp * sinVal;
-				evenNinetyOut += splitMode ? ((i & 1) ? 0.9f * amp * sinVal : 0.f) : amp * cosVal;
-			}
+		// Calculate this outside the loop to get rid of a bunch of branching
+		// 3 types of sync that can introduce discontinuities
+		bool doSync = true;
+		float syncPhase = fundAccum + phaseInc;
+		float minBlepP = 0.f;
+		if (continuousStrideModeChanged || lfoModeChanged) {
+			minBlepP = 0.f;
+		} else if (sync) {
+			minBlepP = syncCrossing - 1.f;
+			syncPhase = normalSyncPhase;
+		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
+			minBlepP = (fundPhaseWrapped / phaseInc) - 1.f;
+		} else {
+			doSync = false;
 		}
+
+		std::array<float_4, 16> out1WithoutSync;
+		std::array<float_4, 16> out1WithSync;
+		std::array<float_4, 16> out2WithoutSync;
+		std::array<float_4, 16> out2WithSync;
+		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
+		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
+		auto syncMask = simd::movemaskInverse<float_4>(doSync ? 0b1111 : 0b0000);
+		auto cosPhaseMask = simd::movemaskInverse<float_4>(splitMode ? 0b0000 : 0b1111);
+		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
+		float_4 ampMult = (float)splitMode + 1.f;
+		for (int i = 0; i < 16; i++) {
+			float_4 overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
+
+			out1WithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
+			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
+			out1WithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, out1WithoutSync[i]);
+			out1WithSync[i] -= simd::floor(out1WithSync[i]);
+			this->phaseAccumulators[i] = out1WithSync[i]; // store before doing PM
+
+			// Phase modulation
+			out2WithoutSync[i] = out1WithoutSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
+
+			out2WithSync[i] = out1WithSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithSync[i] -= simd::floor(out2WithSync[i]);
+
+			out1WithoutSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
+
+			out1WithSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithSync[i] -= simd::floor(out1WithSync[i]);
+
+			// Output 2 doesn't use cosine phase partials in odd/even split mode
+			out2WithoutSync[i] = simd::ifelse(cosPhaseMask, out2WithoutSync[i], out1WithoutSync[i]);
+			out2WithSync[i] = simd::ifelse(cosPhaseMask, out2WithSync[i], out1WithSync[i]);
+
+			// Calculate sin/cos with amplitudes, sum with output
+			out1WithoutSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+				sin2pi_chebyshev(out1WithoutSync[i]) * overallAmplitude,
+				0.f
+			);
+
+			out1WithSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+				sin2pi_chebyshev(out1WithSync[i]) * overallAmplitude,
+				0.f
+			);
+
+			out2WithoutSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+				sin2pi_chebyshev(out2WithoutSync[i]) * overallAmplitude,
+				0.f
+			);
+
+			out2WithSyncSum += simd::ifelse(
+				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+				sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
+				0.f
+			);
+		}
+
+		// Collapse the remaining 4 harmonic accumulators for each output
+		float_4 mainOutsPacked = {out1WithoutSyncSum[0], out1WithSyncSum[0], out2WithoutSyncSum[0], out2WithSyncSum[0]};
+		mainOutsPacked += {out1WithoutSyncSum[1], out1WithSyncSum[1], out2WithoutSyncSum[1], out2WithSyncSum[1]};
+		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
+		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
+
+		// TODO: fully implement fundamental and square
+		auto fundPhaseWithoutSync = out1WithoutSync[0][0];
+		auto fundPhaseWithSync = out1WithSync[0][0];
+		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
+		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
+		auto squareOutWithoutSync = simd::ifelse(fundPhaseWithoutSync < 0.5f, 1.f, -1.f);
+		auto squareOutWithSync = simd::ifelse(fundPhaseWithSync < 0.5f, 1.f, -1.f);
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
+		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
 
-		// TODO: normalize main outs a bit based on harmonic sum (maybe smart sum based on even vs. odd?)
-		oddZeroOut += this->out1Blep.process();
-		evenNinetyOut += this->out2Blep.process();
-		squareOut += this->squareBlep.process();
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(oddZeroOut, drive));
-		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(5.f * Loom::drive(evenNinetyOut, drive));
-		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * fundOut);
-		outputs[SQUARE_OUTPUT].setVoltage(5.f * squareOut);
+		// BLEP
+		if (doSync) {
+			float_4 discontinuities = {
+				mainOutsPacked[1] - mainOutsPacked[0],
+				mainOutsPacked[3] - mainOutsPacked[2],
+				fundOutWithSync - fundOutWithoutSync,
+				squareOutWithSync - squareOutWithoutSync
+			};
+			this->blep.insertDiscontinuity(minBlepP, discontinuities);
+		}
+
+		float_4 outsPacked  = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
+		outsPacked = 5.f * (outsPacked + this->blep.process());
+
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
+		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
+		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
+		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
-			float oscLight = (this->phaseAccumulators[0] < .5f) ? 1.f : -1.f;
+			float oscLight = (fundAccum < .5f) ? 1.f : -1.f;
 			lights[OSCILLATOR_LED_LIGHT_GREEN].setSmoothBrightness(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT_RED].setSmoothBrightness(-oscLight, lightTime);
 			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
-			lights[S_LED_1_LIGHT].setSmoothBrightness(shapingLedIndicators[0], lightTime);
-			lights[S_LED_2_LIGHT].setSmoothBrightness(shapingLedIndicators[1], lightTime);
-			lights[S_LED_3_LIGHT].setSmoothBrightness(shapingLedIndicators[2], lightTime);
-			lights[S_LED_4_LIGHT].setSmoothBrightness(shapingLedIndicators[3], lightTime);
-			lights[S_LED_5_LIGHT].setSmoothBrightness(shapingLedIndicators[4], lightTime);
+			
+			for (int i = 0; i < 8; i++) {
+				int off = i << 1;
+				auto ledAmp = sum_float4(harmonicAmplitudes[off + 0] + harmonicAmplitudes[off + 1]) * .125f;
+				lights[S_LED_1_LIGHT + i].setSmoothBrightness(ledAmp, lightTime);
+			}
 		}
-
-		this->lastContinuousStrideMode = continuousStrideMode;
 	}
 };
 
@@ -641,7 +787,7 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 45.34)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 62.86)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 81.46)), module, Loom::HARM_STRIDE_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 59.763)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 62.938)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 81.428)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.777, 68.589)), module, Loom::DRIVE_KNOB_PARAM));
 
@@ -664,7 +810,7 @@ struct LoomWidget : ModuleWidget {
 
 		// Horizontal switches
 		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(60.837, 85.522)), module, Loom::CONTINUOUS_STRIDE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(31.145, 55.811)), module, Loom::SPECTRAL_TILT_SWITCH_PARAM));
+		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(26.912, 59.634)), module, Loom::SPECTRAL_TILT_SWITCH_PARAM));
 
 		// Inputs
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(29.580, 99.133)), module, Loom::SYNC_INPUT));
@@ -690,11 +836,14 @@ struct LoomWidget : ModuleWidget {
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(71.907, 78.750)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.515, 72.45)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.574, 72.45)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.632, 72.45)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.690, 72.45)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.749, 72.45)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(6.499, 51.356)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(11.637, 51.356)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.776, 51.356)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(21.914, 51.356)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(27.052, 51.356)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.190, 51.356)), module, Loom::S_LED_6_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(37.329, 51.356)), module, Loom::S_LED_7_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(42.467, 51.356)), module, Loom::S_LED_8_LIGHT));
 	}
 };
 
