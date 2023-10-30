@@ -332,8 +332,6 @@ struct Loom : Module {
 			harmonicLimit = (i < harmonicLimit && mult > harmonicMultipleLimit) ? i : harmonicLimit;
 		}
 
-		// TODO: make this cut off harmonics over threshold
-
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
@@ -360,14 +358,16 @@ struct Loom : Module {
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
 		{
+			int lengthIdx = iLengthHigh - 1;
+
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthHigh - 1);
+			float fDensity = density * lengthIdx;
 			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = iDensityLow + 1;
+			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthHigh - 1);
+			float fShift = shift * lengthIdx;
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
@@ -381,7 +381,6 @@ struct Loom : Module {
 			fader *= lengthFade;
 
 			// Do blending
-			int lengthIdx = iLengthHigh - 1;
 			auto &lowDens = this->patternTable[lengthIdx][iDensityLow];
 			auto &highDens = this->patternTable[lengthIdx][iDensityHigh];
 			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthHigh);
@@ -403,14 +402,16 @@ struct Loom : Module {
 
 		// Do low length
 		{
+			int lengthIdx = iLengthLow - 1;
+
 			// Density patterns and fade amount
-			float fDensity = density * (iLengthLow - 1);
+			float fDensity = density * lengthIdx;
 			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = iDensityLow + 1;
+			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
 			float densityFade = fDensity - iDensityLow;
 
 			// Shift values and fade amount
-			float fShift = shift * (iLengthLow - 1);
+			float fShift = shift * lengthIdx;
 			int iShiftLow = (int)std::floor(fShift);
 			int iShiftHigh = iShiftLow + 1;
 			float shiftFade = fShift - iShiftLow;
@@ -424,7 +425,6 @@ struct Loom : Module {
 			fader *= (1.f - lengthFade);
 
 			// Do blending
-			int lengthIdx = iLengthLow - 1;
 			auto &lowDens = this->patternTable[lengthIdx][iDensityLow];
 			auto &highDens = this->patternTable[lengthIdx][iDensityHigh];
 			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthLow);
