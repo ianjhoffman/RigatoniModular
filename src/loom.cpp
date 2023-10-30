@@ -92,6 +92,9 @@ struct Loom : Module {
 		S_LED_3_LIGHT,
 		S_LED_4_LIGHT,
 		S_LED_5_LIGHT,
+		S_LED_6_LIGHT,
+		S_LED_7_LIGHT,
+		S_LED_8_LIGHT,
 		STRIDE_1_LIGHT,
 		LIGHTS_LEN
 	};
@@ -490,7 +493,6 @@ struct Loom : Module {
 
 	static void shapeAmplitudes(
 		std::array<float_4, 16> &amplitudes,
-		std::array<float, 5> &ledIndicators,
 		uint64_t harmonicMask,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
@@ -516,13 +518,6 @@ struct Loom : Module {
 
 			indices += 4.f;
 			shiftAmt -= 4;
-		}
-
-		// LED indicators
-		for (int i = 0; i < 5; i++) {
-			// Always use max harmonic length for LED display
-			float diff = pivotHarm - (63 * (0.25f * (float)i));
-			ledIndicators[i] = clamp(4.f * (pivotBase + ((diff > 0) ? belowSlope * diff : aboveSlope * -diff)));
 		}
 	}
 
@@ -617,8 +612,7 @@ struct Loom : Module {
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
-		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, harmonicMask, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
@@ -764,12 +758,12 @@ struct Loom : Module {
 			lights[OSCILLATOR_LED_LIGHT_GREEN].setSmoothBrightness(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT_RED].setSmoothBrightness(-oscLight, lightTime);
 			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
-			// TODO - 8 LEDs, each showing 8 partials' amplitudes
-			lights[S_LED_1_LIGHT].setSmoothBrightness(shapingLedIndicators[0], lightTime);
-			lights[S_LED_2_LIGHT].setSmoothBrightness(shapingLedIndicators[1], lightTime);
-			lights[S_LED_3_LIGHT].setSmoothBrightness(shapingLedIndicators[2], lightTime);
-			lights[S_LED_4_LIGHT].setSmoothBrightness(shapingLedIndicators[3], lightTime);
-			lights[S_LED_5_LIGHT].setSmoothBrightness(shapingLedIndicators[4], lightTime);
+			
+			for (int i = 0; i < 8; i++) {
+				int off = i << 1;
+				auto ledAmp = sum_float4(harmonicAmplitudes[off + 0] + harmonicAmplitudes[off + 1]) * .125f;
+				lights[S_LED_1_LIGHT + i].setSmoothBrightness(ledAmp, lightTime);
+			}
 		}
 	}
 };
@@ -794,7 +788,7 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 45.34)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 62.86)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.292, 81.46)), module, Loom::HARM_STRIDE_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 59.763)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 62.938)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 81.428)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.777, 68.589)), module, Loom::DRIVE_KNOB_PARAM));
 
@@ -817,7 +811,7 @@ struct LoomWidget : ModuleWidget {
 
 		// Horizontal switches
 		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(60.837, 85.522)), module, Loom::CONTINUOUS_STRIDE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(31.145, 55.811)), module, Loom::SPECTRAL_TILT_SWITCH_PARAM));
+		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(26.912, 59.634)), module, Loom::SPECTRAL_TILT_SWITCH_PARAM));
 
 		// Inputs
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(29.580, 99.133)), module, Loom::SYNC_INPUT));
@@ -843,11 +837,14 @@ struct LoomWidget : ModuleWidget {
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(71.907, 78.750)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.515, 72.45)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.574, 72.45)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.632, 72.45)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.690, 72.45)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.749, 72.45)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(6.499, 51.356)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(11.637, 51.356)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.776, 51.356)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(21.914, 51.356)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(27.052, 51.356)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.190, 51.356)), module, Loom::S_LED_6_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(37.329, 51.356)), module, Loom::S_LED_7_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(42.467, 51.356)), module, Loom::S_LED_8_LIGHT));
 	}
 };
 
