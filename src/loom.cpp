@@ -197,6 +197,7 @@ struct Loom : Module {
 		// Set up everything pre-cached/pre-allocated
 		this->populatePatternTable();
 		this->populateHarmonicSplitMasks();
+		this->calculateBaseAmplitudes();
 		this->phaseAccumulators.fill(0.f);
 	}
 
@@ -212,9 +213,14 @@ struct Loom : Module {
 	// This ends up being a bit wasteful (~200%) but still only uses up 1MB of memory, which I think is fine
 	std::array<std::array<std::array<float, 64>, 64>, 64> patternTable{};
 
+	// Masks for which harmonics go to which output, based on output mode
+	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
+
+	// Precalculated amplitude multipliers per harmonic to avoid lots of divisions during runtime
+	std::array<float_4, 16> baseAmplitudes;
+
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
 	dsp::MinBlepGenerator<16, 16, float> out1Blep, out2Blep, squareBlep, fundBlep;
 	dsp::ClockDivider lightDivider;
 	float lastFundPhase{0.f}, lastSquare{0.f}, lastSync{0.f};
@@ -295,6 +301,14 @@ struct Loom : Module {
 		this->harmonicSplitMasks[2][0] = simd::movemaskInverse<float_4>(0b1011);
 	}
 
+	void calculateBaseAmplitudes() {
+		for (int i = 0; i < 64; i++) {
+			int idx = i >> 2;
+			int offset = i & 0b11;
+			this->baseAmplitudes[idx][offset] = 1.f / (i + 1);
+		}
+	}
+
 	int setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
@@ -323,14 +337,16 @@ struct Loom : Module {
 		// Simple path
 		if (!interpolate) {
 			int iLength = (int)std::round(length);
-			int iDensity = (int)std::round(density * (iLength - 1));
-			int iShift = (int)std::round(shift * (iLength - 1));
+			int lengthIdx = iLength - 1;
+			int iDensity = (int)std::round(density * lengthIdx);
+			int iShift = (int)std::round(shift * lengthIdx);
 
-			auto pattern = this->patternTable[iLength - 1][iDensity];
+			auto &pattern = this->patternTable[lengthIdx][iDensity];
 			for (int i = 0; i < iLength; i++) {
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] = pattern[(iShift + i) % iLength] / (i + 1);
+				amplitudes[off][idx] = pattern[iShift];
+				iShift = (iShift >= lengthIdx) ? 0 : iShift + 1;
 			}
 
 			return iLength;
@@ -362,23 +378,26 @@ struct Loom : Module {
 				(1.f - densityFade) * shiftFade, // low density, high shift
 				densityFade * shiftFade // high density, high shift
 			};
+			fader *= lengthFade;
 
 			// Do blending
-			auto lowDens = this->patternTable[iLengthHigh - 1][iDensityLow];
-			auto highDens = this->patternTable[iLengthHigh - 1][iDensityHigh];
+			int lengthIdx = iLengthHigh - 1;
+			auto &lowDens = this->patternTable[lengthIdx][iDensityLow];
+			auto &highDens = this->patternTable[lengthIdx][iDensityHigh];
 			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthHigh);
 			for (int i = 0; i < numHarmonicsToCalculate; i++) {
-				int highShiftIdx = (i + iShiftHigh) % iLengthHigh;
-				int lowShiftIdx = (i + iShiftLow) % iLengthHigh;
 				float_4 highAmp = {
-					lowDens[lowShiftIdx], highDens[lowShiftIdx],
-					lowDens[highShiftIdx], highDens[highShiftIdx]
+					lowDens[iShiftLow], highDens[iShiftLow],
+					lowDens[iShiftHigh], highDens[iShiftHigh]
 				};
-				highAmp *= fader * lengthFade;
+				highAmp *= fader;
 
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] = (sum_float4(highAmp)) / (i + 1);
+				amplitudes[off][idx] = sum_float4(highAmp);
+
+				iShiftHigh = (iShiftHigh >= lengthIdx) ? 0 : iShiftHigh + 1;
+				iShiftLow = (iShiftLow >= lengthIdx) ? 0 : iShiftLow + 1;
 			}
 		}
 
@@ -402,23 +421,26 @@ struct Loom : Module {
 				(1.f - densityFade) * shiftFade, // low density, high shift
 				densityFade * shiftFade // high density, high shift
 			};
+			fader *= (1.f - lengthFade);
 
 			// Do blending
-			auto lowDens = this->patternTable[iLengthLow - 1][iDensityLow];
-			auto highDens = this->patternTable[iLengthLow - 1][iDensityHigh];
+			int lengthIdx = iLengthLow - 1;
+			auto &lowDens = this->patternTable[lengthIdx][iDensityLow];
+			auto &highDens = this->patternTable[lengthIdx][iDensityHigh];
 			int numHarmonicsToCalculate = std::min(harmonicLimit, iLengthLow);
 			for (int i = 0; i < numHarmonicsToCalculate; i++) {
-				int highShiftIdx = (i + iShiftHigh) % iLengthLow;
-				int lowShiftIdx = (i + iShiftLow) % iLengthLow;
 				float_4 lowAmp = {
-					lowDens[lowShiftIdx], highDens[lowShiftIdx],
-					lowDens[highShiftIdx], highDens[highShiftIdx]
+					lowDens[iShiftLow], highDens[iShiftLow],
+					lowDens[iShiftHigh], highDens[iShiftHigh]
 				};
-				lowAmp *= fader * (1.f - lengthFade);
+				lowAmp *= fader;
 
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] += (sum_float4(lowAmp)) / (i + 1);
+				amplitudes[off][idx] += sum_float4(lowAmp);
+
+				iShiftHigh = (iShiftHigh >= lengthIdx) ? 0 : iShiftHigh + 1;
+				iShiftLow = (iShiftLow >= lengthIdx) ? 0 : iShiftLow + 1;
 			}
 		}
 
@@ -567,7 +589,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
+		//Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
@@ -621,6 +643,8 @@ struct Loom : Module {
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
 		float_4 ampMult = (float)splitMode + 1.f;
 		for (int i = 0; i < 16; i++) {
+			float_4 overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
+
 			out1WithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
 			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
 			out1WithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, out1WithoutSync[i]);
@@ -647,25 +671,25 @@ struct Loom : Module {
 			// Calculate sin/cos with amplitudes, sum with output
 			out1WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out1WithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out1WithoutSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out1WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out1WithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out1WithSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out2WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out2WithoutSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out2WithoutSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out2WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out2WithSync[i]) * harmonicAmplitudes[i] * ampMult,
+				sin2pi_pade_05_5_4(out2WithSync[i]) * overallAmplitude,
 				0.f
 			);
 		}
