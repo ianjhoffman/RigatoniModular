@@ -308,15 +308,19 @@ struct Loom : Module {
 		}
 	}
 
+	// Swap order of every 4-bit chunk
+	inline static uint64_t flipNibbleEndian(uint64_t a) {
+		uint64_t out = (a & 0x8888888888888888) >> 3; // 3 to 0
+		out |= (a & 0x1111111111111111) << 3; // 0 to 3
+		out |= (a & 0x4444444444444444) >> 1; // 2 to 1
+		out |= (a & 0x2222222222222222) << 1; // 1 to 2
+		return out;
+	}
+
 	inline uint64_t getShiftedPattern(uint64_t mask, int length, int density, int shift) {
 		auto pattern = mask & this->patternTable[length - 1][density];
 		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
-		// Swap order of every 4-bit chunk
-		uint64_t out = (shifted & 0x8888888888888888) >> 3; // 3 to 0
-		out |= (shifted & 0x1111111111111111) << 3; // 0 to 3
-		out |= (shifted & 0x4444444444444444) >> 1; // 2 to 1
-		out |= (shifted & 0x2222222222222222) << 1; // 1 to 2
-		return out;
+		return Loom::flipNibbleEndian(shifted);
 	}
 
 	void populateHarmonicSplitMasks() {
@@ -339,7 +343,7 @@ struct Loom : Module {
 		}
 	}
 
-	void setAmplitudesAndMultiples(
+	uint64_t setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
 		float harmonicMultipleLimit,
@@ -378,7 +382,7 @@ struct Loom : Module {
 				pattern <<= 4;
 			}
 
-			return;
+			return harmonicMask;
 		}
 
 		float lengthFade = length - iLengthLow;
@@ -474,6 +478,8 @@ struct Loom : Module {
 				shiftAmt -= 4;
 			}
 		}
+
+		return harmonicMask;
 	}
 
 	inline static std::pair<float, float> calculatePivotSlopes(int tilt) {
@@ -485,6 +491,7 @@ struct Loom : Module {
 	static void shapeAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float, 5> &ledIndicators,
+		uint64_t harmonicMask,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
@@ -498,12 +505,17 @@ struct Loom : Module {
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
 		float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(intensity * 2.f));
 		float_4 indices = {0.f, 1.f, 2.f, 3.f};
+		auto shiftAmt = Loom::AMP_SHIFT;
+		harmonicMask = Loom::flipNibbleEndian(harmonicMask);
 		for (int i = 0; i < 16; i++) {
 			float_4 diffs = pivotHarm - indices;
 			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
-			auto toAdd = pivotBase + slopes * simd::abs(diffs);
+			auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & Loom::AMP_MASK);
+			auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(diffs), 0.f);
 			amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
+
 			indices += 4.f;
+			shiftAmt -= 4;
 		}
 
 		// LED indicators
@@ -596,7 +608,7 @@ struct Loom : Module {
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
-		this->setAmplitudesAndMultiples(
+		auto harmonicMask = this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift, this->interpolate
 		);
 
@@ -606,7 +618,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, harmonicMask, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
