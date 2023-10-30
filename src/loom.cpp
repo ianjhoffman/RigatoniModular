@@ -239,9 +239,9 @@ struct Loom : Module {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float> out1Blep, out2Blep, squareBlep, fundBlep;
+	dsp::MinBlepGenerator<16, 16, float_4> blep;
 	dsp::ClockDivider lightDivider;
-	float lastFundPhase{0.f}, lastSquare{0.f}, lastSync{0.f};
+	float lastSync{0.f};
 	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
 
 	// For custom knob displays to read
@@ -338,7 +338,7 @@ struct Loom : Module {
 		}
 	}
 
-	int setAmplitudesAndMultiples(
+	void setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
 		std::array<float_4, 16> &onStates,
@@ -376,8 +376,6 @@ struct Loom : Module {
 				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
 				pattern <<= 4;
 			}
-
-			return iLength;
 		}
 
 		float lengthFade = length - iLengthLow;
@@ -473,14 +471,12 @@ struct Loom : Module {
 				shiftAmt -= 4;
 			}
 		}
-
-		return iLengthHigh;
 	}
 
-	static std::tuple<float, float, float> calculatePivotSlopes(int tilt) {
-		if (tilt == 0) return {0.1f, -2.f, 0.f};
-		if (tilt == 1) return {-3.f, -3.f, .15f};
-		return {-2.f, 0.1f, 0.f};
+	inline static std::pair<float, float> calculatePivotSlopes(int tilt) {
+		return (tilt == 0) ? std::make_pair(0.1f, -2.f)
+			: ((tilt == 1) ? std::make_pair(-3.f, -3.f)
+			: std::make_pair(-2.f, 0.1f));
 	}
 
 	static void shapeAmplitudes(
@@ -498,7 +494,7 @@ struct Loom : Module {
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
-		float pivotBase = crossfade(0.f, std::get<2>(slopes), clamp(intensity * 2.f));
+		float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(intensity * 2.f));
 		float_4 indices = {0.f, 1.f, 2.f, 3.f};
 		for (int i = 0; i < 16; i++) {
 			float_4 diffs = pivotHarm - indices;
@@ -517,30 +513,20 @@ struct Loom : Module {
 	}
 
 	static float scaleLength(float normalized) {
-		if (normalized >= 0.8f) return 32.f * ((5.f * normalized) - 3.f);
-		if (normalized >= 0.6f) return 16.f * ((5.f * normalized) - 2.f);
-		if (normalized >= 0.4f) return 8.f * ((5.f * normalized) - 1.f);
-		if (normalized >= 0.2f) return 20.f * normalized;
-		return 1.f + 15.f * normalized;
+		auto pow = (normalized <= 0.2f) ? (10.f * normalized) : (5.f * normalized + 1.f);
+		return clamp(dsp::exp2_taylor5(pow), 1.f, 64.f);
 	}
 
 	static float scaleStrideKnobValue(float knob) {
-		if (knob <= 2.f/3.f) return (3.f/4.f) * knob;
-		return (1.5f * knob) - .5f;
+		return (knob <= 2.f/3.f) ? ((3.f/4.f) * knob) : ((1.5f * knob) - .5f);
 	}
 
 	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
-		if (expFm) {
-			coarse += fmCv;
-		}
-
+		coarse += expFm ? fmCv : 0.f;
 		float multiplier = lfoMode ? Loom::LFO_MULTIPLIER : Loom::VCO_MULTIPLIER;
 		float fineTuneMultiplier = dsp::exp2_taylor5(fine * (lfoMode ? 1.f : (7.f / 12.f)));
 		float freq = multiplier * fineTuneMultiplier * dsp::exp2_taylor5(coarse + pitchCv);
-
-		if (!expFm) {
-			freq += fmCv * multiplier * Loom::LIN_FM_FACTOR;
-		}
+		freq += expFm ? 0.f : fmCv * multiplier * Loom::LIN_FM_FACTOR;
 
 		// Clamp to max frequency, allow negative frequency for thru-zero linear FM
 		return std::min(freq, Loom::MAX_FREQ);
@@ -602,13 +588,14 @@ struct Loom : Module {
 
 		// Some simple built-in band-limiting (not perfect because of
 		// drive, fm, pm, all of which can introduce extra harmonics)
-		float harmonicMultipleLimit = (args.sampleRate / (2.f * freq)) - 1.f;
+		auto freq2Recip = simd::rcp(2.f * freq);
+		float harmonicMultipleLimit = args.sampleRate * freq2Recip[0] - 1.f;
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
 		std::array<float_4, 16> onStates{};
-		int numHarmonics = this->setAmplitudesAndMultiples(
+		this->setAmplitudesAndMultiples(
 			harmonicAmplitudes, harmonicMultiples, onStates,
 			harmonicMultipleLimit, length, density, stride, shift, this->interpolate
 		);
@@ -622,9 +609,8 @@ struct Loom : Module {
 		Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
-		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
-			harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], .5f);
-		}
+		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
+		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], boostFund ? .5f : 0.f);
 
 		// Calculate sync
 		float syncIn = inputs[SYNC_INPUT].getVoltage();
@@ -639,7 +625,6 @@ struct Loom : Module {
 		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
-		float fundOut = 0.f, fundOutSync = 0.f, squareOut = 0.f, squareOutSync = 0.f;
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccum = this->phaseAccumulators[0][0];
@@ -731,26 +716,35 @@ struct Loom : Module {
 		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
 
 		// TODO: fully implement fundamental and square
-		fundAccum = this->phaseAccumulators[0][0];
-		fundOut = simd::sin(2.f * M_PI * fundAccum);
-		squareOut = simd::ifelse(fundAccum < 0.5f, 1.f, -1.f);
+		auto fundPhaseWithoutSync = out1WithoutSync[0][0];
+		auto fundPhaseWithSync = out1WithSync[0][0];
+		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
+		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
+		auto squareOutWithoutSync = simd::ifelse(fundPhaseWithoutSync < 0.5f, 1.f, -1.f);
+		auto squareOutWithSync = simd::ifelse(fundPhaseWithSync < 0.5f, 1.f, -1.f);
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		mainOutsPacked = 5.f * Loom::drive(mainOutsPacked, drive);
+		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
-			float out1Disc = mainOutsPacked[1] - mainOutsPacked[0];
-			float out2Disc = mainOutsPacked[3] - mainOutsPacked[2];
-			this->out1Blep.insertDiscontinuity(minBlepP, out1Disc);
-			this->out2Blep.insertDiscontinuity(minBlepP, out2Disc);
+			float_4 discontinuities = {
+				mainOutsPacked[1] - mainOutsPacked[0],
+				mainOutsPacked[3] - mainOutsPacked[2],
+				fundOutWithSync - fundOutWithoutSync,
+				squareOutWithSync - squareOutWithoutSync
+			};
+			this->blep.insertDiscontinuity(minBlepP, discontinuities);
 		}
 
-		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(mainOutsPacked[1] + this->out1Blep.process());
-		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(mainOutsPacked[3] + this->out2Blep.process());
-		outputs[SQUARE_OUTPUT].setVoltage(5.f * (squareOut +  this->squareBlep.process()));
-		outputs[FUNDAMENTAL_OUTPUT].setVoltage(5.f * (fundOut + this->fundBlep.process()));
+		float_4 outsPacked  = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
+		outsPacked = 5.f * (outsPacked + this->blep.process());
+
+		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
+		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
+		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
+		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
@@ -765,8 +759,6 @@ struct Loom : Module {
 			lights[S_LED_4_LIGHT].setSmoothBrightness(shapingLedIndicators[3], lightTime);
 			lights[S_LED_5_LIGHT].setSmoothBrightness(shapingLedIndicators[4], lightTime);
 		}
-
-		this->lastSquare = squareOut;
 	}
 };
 
