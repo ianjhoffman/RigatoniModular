@@ -8,12 +8,27 @@
 
 using simd::float_4;
 
-// From VCV Fundamental VCO module
-template <typename T>
-T sin2pi_pade_05_5_4(T x) {
-	x -= 0.5f;
-	return (T(-6.283185307) * x + T(33.19863968) * simd::pow(x, 3) - T(32.44191367) * simd::pow(x, 5))
-	       / (1 + T(1.296008659) * simd::pow(x, 2) + T(0.7028072946) * simd::pow(x, 4));
+// https://web.archive.org/web/20200628195036/http://mooooo.ooo/chebyshev-sine-approximation/
+// Thanks to Colin Wallace for doing some great math
+const float_4 CHEBYSHEV_COEFFS[6] = {
+	float_4(-3.1415926444234477f),   // x
+	float_4(2.0261194642649887f),    // x^3
+	float_4(-0.5240361513980939f),   // x^5
+	float_4(0.0751872634325299f),    // x^7
+	float_4(-0.006860187425683514f), // x^9
+	float_4(0.000385937753182769f),  // x^11
+};
+
+float_4 sin2pi_chebyshev(float_4 x) {
+	x = (x * 2.f) - 1.f;
+	auto x2 = x * x;
+    auto p11 = CHEBYSHEV_COEFFS[5];
+    auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
+    auto p7 = p9 * x2  + CHEBYSHEV_COEFFS[3];
+    auto p5 = p7 * x2  + CHEBYSHEV_COEFFS[2];
+    auto p3 = p5 * x2  + CHEBYSHEV_COEFFS[1];
+    auto p1 = p3 * x2  + CHEBYSHEV_COEFFS[0];
+    return (x - 1.f) * (x + 1.f) * p1 * x;
 }
 
 inline float sum_float4(float_4 x) {
@@ -208,10 +223,13 @@ struct Loom : Module {
 	static constexpr float VCO_MULTIPLIER = 20.f;
 	static constexpr float LIN_FM_FACTOR = 5.f;
 	static constexpr float MAX_FREQ = 10240.f;
-	static constexpr float SLOPE_SCALE = 0.0025f;
+	static constexpr float SLOPE_SCALE = 0.01f;
 
 	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
+
+	// Masks for shifting sequences of each length
+	std::array<uint64_t, 64> lengthMasks;
 
 	// Masks for which harmonics go to which output, based on output mode
 	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
@@ -284,13 +302,14 @@ struct Loom : Module {
 	void populatePatternTable() {
 		for (int length = 1; length <= 64; length++) {
 			for (int density = 1; density <= length; density++) {
-				patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
+				this->patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
 			}
+			this->lengthMasks[length - 1] = 0xffffffffffffffff << (64 - length);
 		}
 	}
 
-	inline static uint64_t shiftPattern(uint64_t pattern, int shift, int length) {
-		auto shifted = (pattern >> shift) | (pattern << (length - shift));
+	inline uint64_t shiftPattern(uint64_t pattern, int shift, int length) {
+		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
 		// Swap order of every 4-bit chunk
 		uint64_t out = (shifted & 0x8888888888888888) >> 3; // 3 to 0
 		out |= (shifted & 0x1111111111111111) << 3; // 0 to 3
@@ -351,12 +370,11 @@ struct Loom : Module {
 			int iDensity = (int)std::round(density * lengthIdx);
 			int iShift = (int)std::round(shift * lengthIdx);
 
-			auto pattern = Loom::shiftPattern(this->patternTable[lengthIdx][iDensity], iShift, iLength);
-			auto shiftAmt = Loom::AMP_SHIFT;
+			auto pattern = this->shiftPattern(this->patternTable[lengthIdx][iDensity], iShift, iLength);
 			for (int i = 0; i < numBlocks; i++) {
-				auto ampMask = simd::movemaskInverse<float_4>((pattern >> shiftAmt) & Loom::AMP_MASK);
+				auto ampMask = simd::movemaskInverse<float_4>((pattern >> Loom::AMP_SHIFT) & Loom::AMP_MASK);
 				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
-				shiftAmt -= 4;
+				pattern <<= 4;
 			}
 
 			return iLength;
@@ -389,10 +407,10 @@ struct Loom : Module {
 			fader *= lengthFade;
 
 			// Do blending
-			auto lowDensLowShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthHigh);
-			auto lowDensHighShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthHigh);
-			auto highDensLowShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthHigh);
-			auto highDensHighShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthHigh);
+			auto lowDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthHigh);
+			auto lowDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthHigh);
+			auto highDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthHigh);
+			auto highDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -400,6 +418,7 @@ struct Loom : Module {
 				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
 				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
 
+				// Wish I could do a matrix multiplication here
 				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
 				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
 				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
@@ -434,10 +453,10 @@ struct Loom : Module {
 			fader *= (1.f - lengthFade);
 
 			// Do blending
-			auto lowDensLowShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthLow);
-			auto lowDensHighShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthLow);
-			auto highDensLowShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthLow);
-			auto highDensHighShift = Loom::shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthLow);
+			auto lowDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthLow);
+			auto lowDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthLow);
+			auto highDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthLow);
+			auto highDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthLow);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -445,6 +464,7 @@ struct Loom : Module {
 				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
 				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
 
+				// Wish I could do a matrix multiplication here
 				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
 				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
 				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
@@ -475,7 +495,7 @@ struct Loom : Module {
 		float cubicPivot = dsp::cubic(pivot);
 		float pivotHarm = cubicPivot * 63;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
-		float slopeMultiplier = (intensity < .5f) ? (intensity * 2.f) : (4.f * intensity - 1.f);
+		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
 		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
 		float pivotBase = crossfade(0.f, std::get<2>(slopes), clamp(intensity * 2.f));
@@ -599,7 +619,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		//Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		if (params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f) {
@@ -681,39 +701,38 @@ struct Loom : Module {
 			// Calculate sin/cos with amplitudes, sum with output
 			out1WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out1WithoutSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out1WithoutSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out1WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out1WithSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out1WithSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out2WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out2WithoutSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out2WithoutSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out2WithSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_pade_05_5_4(out2WithSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
 				0.f
 			);
 		}
 
-		float_4 mainOutsPacked = {
-			sum_float4(out1WithoutSyncSum),
-			sum_float4(out1WithSyncSum),
-			sum_float4(out2WithoutSyncSum),
-			sum_float4(out2WithSyncSum),
-		};
+		// Collapse the remaining 4 harmonic accumulators for each output
+		float_4 mainOutsPacked = {out1WithoutSyncSum[0], out1WithSyncSum[0], out2WithoutSyncSum[0], out2WithSyncSum[0]};
+		mainOutsPacked += {out1WithoutSyncSum[1], out1WithSyncSum[1], out2WithoutSyncSum[1], out2WithSyncSum[1]};
+		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
+		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
 
 		// TODO: fully implement fundamental and square
 		fundAccum = this->phaseAccumulators[0][0];
-		fundOut = sin2pi_pade_05_5_4(fundAccum);
+		fundOut = simd::sin(2.f * M_PI * fundAccum);
 		squareOut = simd::ifelse(fundAccum < 0.5f, 1.f, -1.f);
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
@@ -721,7 +740,6 @@ struct Loom : Module {
 		mainOutsPacked = 5.f * Loom::drive(mainOutsPacked, drive);
 
 		// BLEP
-		// TODO: figure out why this isn't doing what it's supposed to do
 		if (doSync) {
 			float out1Disc = mainOutsPacked[1] - mainOutsPacked[0];
 			float out2Disc = mainOutsPacked[3] - mainOutsPacked[2];
