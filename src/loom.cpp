@@ -341,7 +341,6 @@ struct Loom : Module {
 	void setAmplitudesAndMultiples(
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
-		std::array<float_4, 16> &onStates,
 		float harmonicMultipleLimit,
 		float length, // 1-64
 		float density, // 0-1
@@ -349,16 +348,17 @@ struct Loom : Module {
 		float shift, // 0-1
 		bool interpolate
 	) {
-		int harmonicLimit = 64;
-		// Always calculate all frequency multiples so everything stays aligned
-		for (int i = 0; i < 64; i++) {
-			int offset = i >> 2;
-			int idx = i & 0b11;
-			float mult = 1.f + i * stride;
-			multiples[offset][idx] = mult;
-			onStates[offset][idx] = (float)(mult <= harmonicMultipleLimit);
-			harmonicLimit = (i < harmonicLimit && mult > harmonicMultipleLimit) ? i : harmonicLimit;
+		// Frequency multiple calculations
+		float_4 indices = {0.f, 1.f, 2.f, 3.f};
+		for (int i = 0; i < 16; i++) {
+			multiples[i] = 1.f + (indices * stride);
+			indices += 4.f;
 		}
+
+		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
+		int harmonicLimit = (harmonicMultipleLimit - 1.f) / std::fmax(stride, 0.1f);
+		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
+
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
 		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
@@ -370,7 +370,7 @@ struct Loom : Module {
 			int iDensity = (int)std::round(density * lengthIdx);
 			int iShift = (int)std::round(shift * lengthIdx);
 
-			auto pattern = this->shiftPattern(this->patternTable[lengthIdx][iDensity], iShift, iLength);
+			auto pattern = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensity], iShift, iLength);
 			for (int i = 0; i < numBlocks; i++) {
 				auto ampMask = simd::movemaskInverse<float_4>((pattern >> Loom::AMP_SHIFT) & Loom::AMP_MASK);
 				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
@@ -405,10 +405,10 @@ struct Loom : Module {
 			fader *= lengthFade;
 
 			// Do blending
-			auto lowDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthHigh);
-			auto lowDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthHigh);
-			auto highDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthHigh);
-			auto highDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthHigh);
+			auto lowDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthHigh);
+			auto lowDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthHigh);
+			auto highDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthHigh);
+			auto highDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -451,10 +451,10 @@ struct Loom : Module {
 			fader *= (1.f - lengthFade);
 
 			// Do blending
-			auto lowDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthLow);
-			auto lowDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthLow);
-			auto highDensLowShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthLow);
-			auto highDensHighShift = this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthLow);
+			auto lowDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthLow);
+			auto lowDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthLow);
+			auto highDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthLow);
+			auto highDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthLow);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -481,7 +481,6 @@ struct Loom : Module {
 
 	static void shapeAmplitudes(
 		std::array<float_4, 16> &amplitudes,
-		std::array<float_4, 16> &onStates,
 		std::array<float, 5> &ledIndicators,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
@@ -499,7 +498,7 @@ struct Loom : Module {
 		for (int i = 0; i < 16; i++) {
 			float_4 diffs = pivotHarm - indices;
 			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
-			auto toAdd = onStates[i] * (pivotBase + slopes * simd::abs(diffs));
+			auto toAdd = pivotBase + slopes * simd::abs(diffs);
 			amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 			indices += 4.f;
 		}
@@ -594,10 +593,8 @@ struct Loom : Module {
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
-		std::array<float_4, 16> onStates{};
 		this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, onStates,
-			harmonicMultipleLimit, length, density, stride, shift, this->interpolate
+			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift, this->interpolate
 		);
 
 		// Spectral shaping
@@ -606,7 +603,7 @@ struct Loom : Module {
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		std::array<float, 5> shapingLedIndicators;
-		Loom::shapeAmplitudes(harmonicAmplitudes, onStates, shapingLedIndicators, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, shapingLedIndicators, length, tilt, pivot, intensity);
 		
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
