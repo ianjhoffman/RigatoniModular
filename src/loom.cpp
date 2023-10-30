@@ -16,6 +16,10 @@ T sin2pi_pade_05_5_4(T x) {
 	       / (1 + T(1.296008659) * simd::pow(x, 2) + T(0.7028072946) * simd::pow(x, 4));
 }
 
+inline float sum_float4(float_4 x) {
+	return x[0] + x[1] + x[2] + x[3];
+}
+
 struct Loom : Module {
 	enum ParamId {
 		CONTINUOUS_STRIDE_SWITCH_PARAM,
@@ -374,7 +378,7 @@ struct Loom : Module {
 
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] = (highAmp[0] + highAmp[1] + highAmp[2] + highAmp[3]) / (i + 1);
+				amplitudes[off][idx] = (sum_float4(highAmp)) / (i + 1);
 			}
 		}
 
@@ -414,7 +418,7 @@ struct Loom : Module {
 
 				int off = i >> 2;
 				int idx = i & 0b11;
-				amplitudes[off][idx] += (lowAmp[0] + lowAmp[1] + lowAmp[2] + lowAmp[3]) / (i + 1);
+				amplitudes[off][idx] += (sum_float4(lowAmp)) / (i + 1);
 			}
 		}
 
@@ -572,9 +576,9 @@ struct Loom : Module {
 
 		// Calculate sync
 		float syncIn = inputs[SYNC_INPUT].getVoltage();
-		float syncCrossingSamplesAgo = -this->lastSync / (syncIn - this->lastSync);
+		float syncCrossing = -this->lastSync / (syncIn - this->lastSync);
 		this->lastSync = syncIn;
-		bool sync = (0.f < syncCrossingSamplesAgo) && (syncCrossingSamplesAgo <= 1.f) && (syncIn >= 0.f);
+		bool sync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncIn >= 0.f);
 
 		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
@@ -582,7 +586,7 @@ struct Loom : Module {
 		phaseOffset -= std::floor(phaseOffset);
 		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
-		float normalSyncPhase = (1.f - syncCrossingSamplesAgo) * phaseInc;
+		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
 		float fundOut = 0.f, fundOutSync = 0.f, squareOut = 0.f, squareOutSync = 0.f;
 
 		// Calculate fundamental sync for non-free continuous stride
@@ -594,14 +598,14 @@ struct Loom : Module {
 		// 3 types of sync that can introduce discontinuities
 		bool doSync = true;
 		float syncPhase = fundAccum + phaseInc;
-		float anySyncCrossingSamplesAgo = 0.f;
+		float minBlepP = 0.f;
 		if (continuousStrideModeChanged || lfoModeChanged) {
-			anySyncCrossingSamplesAgo = 0.f;
+			minBlepP = 0.f;
 		} else if (sync) {
-			anySyncCrossingSamplesAgo = syncCrossingSamplesAgo;
+			minBlepP = syncCrossing - 1.f;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
-			anySyncCrossingSamplesAgo = fundPhaseWrapped / phaseInc;
+			minBlepP = (fundPhaseWrapped / phaseInc) - 1.f;
 		} else {
 			doSync = false;
 		}
@@ -667,10 +671,10 @@ struct Loom : Module {
 		}
 
 		float_4 mainOutsPacked = {
-			out1WithoutSyncSum[0] + out1WithoutSyncSum[1] + out1WithoutSyncSum[2] + out1WithoutSyncSum[3],
-			out1WithSyncSum[0] + out1WithSyncSum[1] + out1WithSyncSum[2] + out1WithSyncSum[3],
-			out2WithoutSyncSum[0] + out2WithoutSyncSum[1] + out2WithoutSyncSum[2] + out2WithoutSyncSum[3],
-			out2WithSyncSum[0] + out2WithSyncSum[1] + out2WithSyncSum[2] + out2WithSyncSum[3]
+			sum_float4(out1WithoutSyncSum),
+			sum_float4(out1WithSyncSum),
+			sum_float4(out2WithoutSyncSum),
+			sum_float4(out2WithSyncSum),
 		};
 
 		// TODO: fully implement fundamental and square
@@ -687,8 +691,8 @@ struct Loom : Module {
 		if (doSync) {
 			float out1Disc = mainOutsPacked[1] - mainOutsPacked[0];
 			float out2Disc = mainOutsPacked[3] - mainOutsPacked[2];
-			this->out1Blep.insertDiscontinuity(anySyncCrossingSamplesAgo, out1Disc);
-			this->out2Blep.insertDiscontinuity(anySyncCrossingSamplesAgo, out2Disc);
+			this->out1Blep.insertDiscontinuity(minBlepP, out1Disc);
+			this->out2Blep.insertDiscontinuity(minBlepP, out2Disc);
 		}
 
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(mainOutsPacked[1] + this->out1Blep.process());
@@ -702,6 +706,7 @@ struct Loom : Module {
 			lights[OSCILLATOR_LED_LIGHT_GREEN].setSmoothBrightness(oscLight, lightTime);
 			lights[OSCILLATOR_LED_LIGHT_RED].setSmoothBrightness(-oscLight, lightTime);
 			lights[STRIDE_1_LIGHT].setSmoothBrightness(strideIsOne ? 1.f : 0.f, lightTime);
+			// TODO - 8 LEDs, each showing 8 partials' amplitudes
 			lights[S_LED_1_LIGHT].setSmoothBrightness(shapingLedIndicators[0], lightTime);
 			lights[S_LED_2_LIGHT].setSmoothBrightness(shapingLedIndicators[1], lightTime);
 			lights[S_LED_3_LIGHT].setSmoothBrightness(shapingLedIndicators[2], lightTime);
