@@ -308,7 +308,8 @@ struct Loom : Module {
 		}
 	}
 
-	inline uint64_t shiftPattern(uint64_t pattern, int shift, int length) {
+	inline uint64_t getShiftedPattern(uint64_t mask, int length, int density, int shift) {
+		auto pattern = mask & this->patternTable[length - 1][density];
 		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
 		// Swap order of every 4-bit chunk
 		uint64_t out = (shifted & 0x8888888888888888) >> 3; // 3 to 0
@@ -356,12 +357,12 @@ struct Loom : Module {
 		}
 
 		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
-		int harmonicLimit = (harmonicMultipleLimit - 1.f) / std::fmax(stride, 0.1f);
+		int harmonicLimit = harmonicMultipleLimit / std::fmax(stride, 0.1f);
 		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
 
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
-		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
+		int numBlocks = 0b1 | ((std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2);
 
 		// Simple path
 		if (!interpolate) {
@@ -370,12 +371,14 @@ struct Loom : Module {
 			int iDensity = (int)std::round(density * lengthIdx);
 			int iShift = (int)std::round(shift * lengthIdx);
 
-			auto pattern = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensity], iShift, iLength);
+			auto pattern = this->getShiftedPattern(harmonicMask, iLength, iDensity, iShift);
 			for (int i = 0; i < numBlocks; i++) {
 				auto ampMask = simd::movemaskInverse<float_4>((pattern >> Loom::AMP_SHIFT) & Loom::AMP_MASK);
 				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
 				pattern <<= 4;
 			}
+
+			return;
 		}
 
 		float lengthFade = length - iLengthLow;
@@ -405,10 +408,10 @@ struct Loom : Module {
 			fader *= lengthFade;
 
 			// Do blending
-			auto lowDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthHigh);
-			auto lowDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthHigh);
-			auto highDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthHigh);
-			auto highDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthHigh);
+			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -451,10 +454,10 @@ struct Loom : Module {
 			fader *= (1.f - lengthFade);
 
 			// Do blending
-			auto lowDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftLow, iLengthLow);
-			auto lowDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityLow], iShiftHigh, iLengthLow);
-			auto highDensLowShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftLow, iLengthLow);
-			auto highDensHighShift = harmonicMask & this->shiftPattern(this->patternTable[lengthIdx][iDensityHigh], iShiftHigh, iLengthLow);
+			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
