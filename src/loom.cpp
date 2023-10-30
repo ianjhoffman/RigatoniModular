@@ -499,8 +499,7 @@ struct Loom : Module {
 		float pivot,
 		float intensity
 	) {
-		float cubicPivot = dsp::cubic(pivot);
-		float pivotHarm = cubicPivot * 63;
+		float pivotHarm = Loom::scaleLength(pivot) - 1.f;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
 		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
