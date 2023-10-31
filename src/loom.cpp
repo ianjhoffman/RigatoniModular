@@ -338,22 +338,14 @@ struct Loom : Module {
 		}
 	}
 
-	uint64_t setAmplitudesAndMultiples(
+	uint64_t setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
-		std::array<float_4, 16> &multiples,
 		float harmonicMultipleLimit,
 		float length,  // 1-64
 		float density, // 0-1
 		float stride,  // 0-4
 		float shift    // 0-1
 	) {
-		// Frequency multiple calculations
-		float_4 indices = {0.f, 1.f, 2.f, 3.f};
-		for (int i = 0; i < 16; i++) {
-			multiples[i] = 1.f + (indices * stride);
-			indices += 4.f;
-		}
-
 		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
 		int harmonicLimit = harmonicMultipleLimit / std::fmax(stride, 0.1f);
 		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
@@ -573,9 +565,8 @@ struct Loom : Module {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		std::array<float_4, 16> harmonicMultiples{};
-		auto harmonicMask = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift
+		auto harmonicMask = this->setAmplitudes(
+			harmonicAmplitudes, harmonicMultipleLimit, length, density, stride, shift
 		);
 
 		// Spectral shaping
@@ -635,26 +626,38 @@ struct Loom : Module {
 		auto cosPhaseMask = simd::movemaskInverse<float_4>(splitMode ? 0b0000 : 0b1111);
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
 		float_4 ampMult = (float)splitMode + 1.f;
+
+		// Trying something new with progressive phase multiple calculations for precision (?)
+		float_4 phaseIncAdd = phaseInc * 4.f * stride;
+		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
+		float_4 sinPhaseOffsetAdd = phaseOffset * 4.f * stride;
+		float_4 cosPhaseOffsetAdd = cosPhaseOffset * stride;
+
+		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
+		float_4 out1BaseAdd = multiples * phaseInc;
+		float_4 out1SyncIf = multiples * syncPhase;
+		float_4 out1PmAdd = multiples * phaseOffset;
+		float_4 out2PmAdd = multiples * cosPhaseOffset;
 		for (int i = 0; i < 16; i++) {
 			float_4 overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
 
-			out1WithoutSync[i] = this->phaseAccumulators[i] + (phaseInc * harmonicMultiples[i]);
+			out1WithoutSync[i] = this->phaseAccumulators[i] + out1BaseAdd;
 			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
-			out1WithSync[i] = simd::ifelse(syncMask, harmonicMultiples[i] * syncPhase, out1WithoutSync[i]);
+			out1WithSync[i] = simd::ifelse(syncMask, out1SyncIf, out1WithoutSync[i]);
 			out1WithSync[i] -= simd::floor(out1WithSync[i]);
 			this->phaseAccumulators[i] = out1WithSync[i]; // store before doing PM
 
 			// Phase modulation
-			out2WithoutSync[i] = out1WithoutSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithoutSync[i] = out1WithoutSync[i] + out2PmAdd;
 			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
 
-			out2WithSync[i] = out1WithSync[i] + (cosPhaseOffset * harmonicMultiples[i]);
+			out2WithSync[i] = out1WithSync[i] + out2PmAdd;
 			out2WithSync[i] -= simd::floor(out2WithSync[i]);
 
-			out1WithoutSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithoutSync[i] += out1PmAdd;
 			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
 
-			out1WithSync[i] += (phaseOffset * harmonicMultiples[i]);
+			out1WithSync[i] += out1PmAdd;
 			out1WithSync[i] -= simd::floor(out1WithSync[i]);
 
 			// Output 2 doesn't use cosine phase partials in odd/even split mode
@@ -685,6 +688,12 @@ struct Loom : Module {
 				sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
 				0.f
 			);
+
+			// Update progressive phase multiple calculations
+			out1BaseAdd += phaseIncAdd;
+			out1SyncIf += syncPhaseAdd;
+			out1PmAdd += sinPhaseOffsetAdd;
+			out2PmAdd += cosPhaseOffsetAdd;
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
