@@ -598,11 +598,16 @@ struct Loom : Module {
 		this->lastSyncValue = syncValue;
 		bool normalSync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncValue >= 0.f);
 
+		// Calculate phase modulation offsets
+		float sinPhaseOffset = clamp(
+			params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f
+		);
+		sinPhaseOffset -= std::floor(sinPhaseOffset);
+		float cosPhaseOffset = sinPhaseOffset + 0.25f;
+		cosPhaseOffset -= std::floor(cosPhaseOffset);
+
 		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
-		float phaseOffset = clamp(params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage(), -1.f, 1.f);
-		phaseOffset -= std::floor(phaseOffset);
-		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
@@ -628,10 +633,7 @@ struct Loom : Module {
 
 		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
 		// for each output for both synced and unsynced ph
-		std::array<float_4, 16> out1WithoutSync;
-		std::array<float_4, 16> out1WithSync;
-		std::array<float_4, 16> out2WithoutSync;
-		std::array<float_4, 16> out2WithSync;
+		std::array<float_4, 16> out1PhaseWithoutSync;
 		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
 		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
@@ -640,69 +642,69 @@ struct Loom : Module {
 		// Trying something new with progressive phase multiple calculations for precision (?)
 		float_4 phaseIncAdd = phaseInc * 4.f * stride;
 		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
-		float_4 sinPhaseOffsetAdd = phaseOffset * 4.f * stride;
+		float_4 sinPhaseOffsetAdd = sinPhaseOffset * 4.f * stride;
 		float_4 cosPhaseOffsetAdd = cosPhaseOffset * stride;
 
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 out1BaseAdd = multiples * phaseInc;
 		float_4 out1SyncPhase = multiples * syncPhase;
-		float_4 out1PmAdd = multiples * phaseOffset;
+		float_4 out1PmAdd = multiples * sinPhaseOffset;
 		float_4 out2PmAdd = multiples * cosPhaseOffset;
 		for (int i = 0; i < 16; i++) {
 			float_4 overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
 
-			out1WithoutSync[i] = this->phaseAccumulators[i] + out1BaseAdd;
-			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
-			float_4 phaseAccumVal = out1WithoutSync[i]; // store before doing PM
+			out1PhaseWithoutSync[i] = this->phaseAccumulators[i] + out1BaseAdd;
+			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
+			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
 
 			// Phase modulation
-			out1WithoutSync[i] += out1PmAdd;
-			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
+			out1PhaseWithoutSync[i] += out1PmAdd;
+			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
 
-			out2WithoutSync[i] = phaseAccumVal + out2PmAdd;
-			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
+			float_4 out2PhaseWithoutSync = phaseAccumVal + out2PmAdd;
+			out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
 
 			// Output 2 doesn't use cosine phase partials in odd/even split mode
-			out2WithoutSync[i] = splitMode ? out1WithoutSync[i] : out2WithoutSync[i];
+			out2PhaseWithoutSync = splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync[i];
 
 			// Calculate sin/cos with amplitudes, sum with output
 			out1WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out1WithoutSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
 				0.f
 			);
 
 			out2WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out2WithoutSync[i]) * overallAmplitude,
+				sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
 				0.f
 			);
 
 			// It turns out that branching in the loop is significantly faster than branchless
 			if (doSync) {
-				out1WithSync[i] = out1SyncPhase;
-				out1WithSync[i] -= simd::floor(out1WithSync[i]);
-				phaseAccumVal = out1WithSync[i]; // store before doing PM
+				float_4 out1PhaseWithSync = out1SyncPhase;
+				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
+				phaseAccumVal = out1PhaseWithSync; // store before doing PM
 
 				// Phase modulation (sync)
-				out1WithSync[i] += out1PmAdd;
-				out1WithSync[i] -= simd::floor(out1WithSync[i]);
+				out1PhaseWithSync += out1PmAdd;
+				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
 
-				out2WithSync[i] = phaseAccumVal + out2PmAdd;
-				out2WithSync[i] -= simd::floor(out2WithSync[i]);
+				float_4 out2PhaseWithSync = phaseAccumVal + out2PmAdd;
+				out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
 
 				// Output 2 doesn't use cosine phase partials in odd/even split mode
-				out2WithSync[i] = splitMode ? out1WithSync[i] : out2WithSync[i];
+				out2PhaseWithSync = splitMode ? out1PhaseWithSync : out2PhaseWithSync;
 
 				out1WithSyncSum += simd::ifelse(
 					this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-					sin2pi_chebyshev(out1WithSync[i]) * overallAmplitude,
+					sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
 					0.f
 				);
 
 				out2WithSyncSum += simd::ifelse(
 					this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-					sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
+					sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
 					0.f
 				);
 			}
@@ -729,7 +731,7 @@ struct Loom : Module {
 		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
 
 		// Fundamental and square outs are a lot easier
-		auto fundPhaseWithoutSync = out1WithoutSync[0][0];
+		auto fundPhaseWithoutSync = out1PhaseWithoutSync[0][0];
 		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
 		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
 		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
