@@ -38,7 +38,6 @@ inline float sum_float4(float_4 x) {
 struct Loom : Module {
 	enum ParamId {
 		CONTINUOUS_STRIDE_SWITCH_PARAM,
-		INTERPOLATION_SWITCH_PARAM,
 		RANGE_SWITCH_PARAM,
 		COARSE_TUNE_KNOB_PARAM,
 		FINE_TUNE_KNOB_PARAM,
@@ -141,17 +140,13 @@ struct Loom : Module {
 
 		struct HarmCountQuantity : ParamQuantity {
 			float getDisplayValue() override {
-				Loom* module = reinterpret_cast<Loom*>(this->module);
-				float out = scaleLength(ParamQuantity::getDisplayValue());
-				return module->interpolate ? out : std::round(out);
+				return scaleLength(ParamQuantity::getDisplayValue());
 			}
 		};
 
 		struct HarmStrideQuantity : ParamQuantity {
 			float getDisplayValue() override {
-				Loom* module = reinterpret_cast<Loom*>(this->module);
-				float out = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
-				return module->continuousStride ? out : std::round(out);
+				return 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
 			}
 		};
 
@@ -187,7 +182,6 @@ struct Loom : Module {
 
 		// Switches
 		configSwitch(CONTINUOUS_STRIDE_SWITCH_PARAM, 0.f, 2.f, 0.f, "Continuous Harmonic Stride", {"Off", "Sync", "Free"});
-		configSwitch(INTERPOLATION_SWITCH_PARAM, 0.f, 1.f, 1.f, "Harmonic Distribution Interpolation", {"Off", "On"});
 		configSwitch(RANGE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Oscillator Range", {"LFO", "VCO"});
 		configSwitch(LIN_EXP_FM_SWITCH_PARAM, 0.f, 1.f, 0.f, "FM Response", {"Lin", "Exp"});
 		configSwitch(SPECTRAL_TILT_SWITCH_PARAM, 0.f, 2.f, 0.f, "Spectral Tilt", {"Lowpass", "Bandpass", "Highpass"});
@@ -249,7 +243,6 @@ struct Loom : Module {
 	// For custom knob displays to read
 	bool lfoMode{false};
 	bool continuousStride{false};
-	bool interpolate{true};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int numRelevantBits(uint64_t n) {
@@ -349,11 +342,10 @@ struct Loom : Module {
 		std::array<float_4, 16> &amplitudes,
 		std::array<float_4, 16> &multiples,
 		float harmonicMultipleLimit,
-		float length, // 1-64
+		float length,  // 1-64
 		float density, // 0-1
-		float stride, // 0-4
-		float shift, // 0-1
-		bool interpolate
+		float stride,  // 0-4
+		float shift    // 0-1
 	) {
 		// Frequency multiple calculations
 		float_4 indices = {0.f, 1.f, 2.f, 3.f};
@@ -369,24 +361,6 @@ struct Loom : Module {
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
 		int numBlocks = 0b1 | ((std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2);
-
-		// Simple path
-		if (!interpolate) {
-			int iLength = (int)std::round(length);
-			int lengthIdx = iLength - 1;
-			int iDensity = (int)std::round(density * lengthIdx);
-			int iShift = (int)std::round(shift * lengthIdx);
-
-			auto pattern = this->getShiftedPattern(harmonicMask, iLength, iDensity, iShift);
-			for (int i = 0; i < numBlocks; i++) {
-				auto ampMask = simd::movemaskInverse<float_4>((pattern >> Loom::AMP_SHIFT) & Loom::AMP_MASK);
-				amplitudes[i] = simd::ifelse(ampMask, 1.f, 0.f);
-				pattern <<= 4;
-			}
-
-			return harmonicMask;
-		}
-
 		float lengthFade = length - iLengthLow;
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
@@ -558,7 +532,6 @@ struct Loom : Module {
 		bool continuousStrideModeChanged = continuousStrideMode != this->lastContinuousStrideMode;
 		this->lastContinuousStrideMode = continuousStrideMode;
 		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
-		this->interpolate = params[INTERPOLATION_SWITCH_PARAM].getValue() > .5f;
 
 		// Read harmonic structure parameters, including attenuverters and CV inputs
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
@@ -602,7 +575,7 @@ struct Loom : Module {
 		std::array<float_4, 16> harmonicAmplitudes{};
 		std::array<float_4, 16> harmonicMultiples{};
 		auto harmonicMask = this->setAmplitudesAndMultiples(
-			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift, this->interpolate
+			harmonicAmplitudes, harmonicMultiples, harmonicMultipleLimit, length, density, stride, shift
 		);
 
 		// Spectral shaping
@@ -792,7 +765,7 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.777, 68.589)), module, Loom::DRIVE_KNOB_PARAM));
 
 		// Trimpots
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(58.498, 15.157)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(56.382, 22.203)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(66.848, 41.959)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(66.848, 56.443)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(66.848, 71.726)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
@@ -803,10 +776,9 @@ struct LoomWidget : ModuleWidget {
 
 		// Vertical switches
 		addParam(createParamCentered<CKSS>(mm2px(Vec(5.787, 20.368)), module, Loom::RANGE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(55.443, 49.195)), module, Loom::BOOST_FUNDAMENTAL_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(55.443, 68.458)), module, Loom::OUTPUT_MODE_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 42.315)), module, Loom::BOOST_FUNDAMENTAL_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 64.225)), module, Loom::OUTPUT_MODE_SWITCH_PARAM));
 		addParam(createParamCentered<CKSS>(mm2px(Vec(42.119, 20.552)), module, Loom::LIN_EXP_FM_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(55.443, 30.088)), module, Loom::INTERPOLATION_SWITCH_PARAM));
 
 		// Horizontal switches
 		addParam(createParamCentered<CKSSThreeHorizontal>(mm2px(Vec(60.837, 85.522)), module, Loom::CONTINUOUS_STRIDE_SWITCH_PARAM));
