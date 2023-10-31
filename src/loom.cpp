@@ -20,7 +20,7 @@ const float_4 CHEBYSHEV_COEFFS[6] = {
 };
 
 float_4 sin2pi_chebyshev(float_4 x) {
-	x = (x * 2.f) - 1.f;
+	x = (-x * 2.f) + 1.f;
 	auto x2 = x * x;
     auto p11 = CHEBYSHEV_COEFFS[5];
     auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
@@ -219,7 +219,6 @@ struct Loom : Module {
 		this->phaseAccumulators.fill(0.f);
 	}
 
-	// Having this around makes it easier to calculate partial amplitudes from our bitmasks
 	static constexpr uint64_t AMP_MASK = 0x000000000000000f;
 	static constexpr int AMP_SHIFT = 60;
 	static constexpr float LFO_MULTIPLIER = .05f;
@@ -596,7 +595,7 @@ struct Loom : Module {
 
 		// Some simple built-in band-limiting (not perfect because of
 		// drive, fm, pm, all of which can introduce extra harmonics)
-		auto freq2Recip = simd::rcp(2.f * freq);
+		auto freq2Recip = simd::rcp(2.f * std::abs(freq)); // TZFM can make frequency negative
 		float harmonicMultipleLimit = args.sampleRate * freq2Recip[0] - 1.f;
 
 		// Actually do partial amplitude/frequency calculations
@@ -629,6 +628,7 @@ struct Loom : Module {
 		phaseOffset -= std::floor(phaseOffset);
 		float cosPhaseOffset = phaseOffset + 0.25f;
 		float phaseInc = freq * args.sampleTime;
+		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
 
 		// Calculate fundamental sync for non-free continuous stride
@@ -639,7 +639,7 @@ struct Loom : Module {
 		// Calculate this outside the loop to get rid of a bunch of branching
 		// 3 types of sync that can introduce discontinuities
 		bool doSync = true;
-		float syncPhase = fundAccum + phaseInc;
+		float syncPhase = fundPhaseWrapped;
 		float minBlepP = 0.f;
 		if (continuousStrideModeChanged || lfoModeChanged) {
 			minBlepP = 0.f;
@@ -647,7 +647,7 @@ struct Loom : Module {
 			minBlepP = syncCrossing - 1.f;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
-			minBlepP = (fundPhaseWrapped / phaseInc) - 1.f;
+			minBlepP = -(fundPhaseWrapped / phaseInc);
 		} else {
 			doSync = false;
 		}
@@ -720,7 +720,7 @@ struct Loom : Module {
 		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
 		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
 
-		// TODO: fully implement fundamental and square
+		// Fundamental and square outs are a lot easier
 		auto fundPhaseWithoutSync = out1WithoutSync[0][0];
 		auto fundPhaseWithSync = out1WithSync[0][0];
 		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
