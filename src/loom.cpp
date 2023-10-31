@@ -511,9 +511,25 @@ struct Loom : Module {
 		in *= drive * .5f;
 		auto overThresh = simd::abs(in) - .9f;
 		auto underThreshMask = overThresh < 0.f;
-		auto subAmt = simd::clamp(overThresh * overThresh * drive, 0.f, overThresh * 1.25f);
-		auto driven = simd::ifelse(in < 0.f, in + subAmt, in - subAmt);
-		return simd::ifelse(underThreshMask, in, driven);
+		auto subAmt = overThresh * overThresh * drive * simd::sgn(in);
+		return simd::ifelse(underThreshMask, in, in - subAmt);
+	}
+
+	static float_4 drive2(float_4 in, float drive) {
+		constexpr float BASE_SLOPE = 0.31414587743685775f; // 3/8 * (4 - sqrt(10))
+		constexpr float CURVE_SUB = 2.952847075210474f; // (5/2 * sqrt(5/2)) - 1
+		constexpr float Y_SCALE = 0.25f;
+		constexpr float X_SCALE = 8.f;
+		constexpr float X_LIMIT = 16.f; // Slope of soft clipping function is 0 at x = 16
+		constexpr float Y_AT_LIMIT = 4.047152924789525f; // 8 - (5/2 * sqrt(5/2))
+
+		auto x = in * X_SCALE * drive;
+		auto abs = simd::abs(x);
+		auto sign = simd::sgn(x);
+		auto underThreshMask = abs <= 10.f;
+		auto addAmt = -0.25f * sign * simd::pow(abs, float_4(1.5f)) + x - sign * (1.f + CURVE_SUB);
+		auto out = simd::ifelse(underThreshMask, BASE_SLOPE * x, 0.5f * x + addAmt);
+		return Y_SCALE * simd::ifelse(abs >= X_LIMIT, sign * Y_AT_LIMIT, out);
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -713,6 +729,7 @@ struct Loom : Module {
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
 		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		//mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
