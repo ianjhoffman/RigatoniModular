@@ -643,7 +643,7 @@ struct Loom : Module {
 		float_4 phaseIncAdd = phaseInc * 4.f * stride;
 		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
 		float_4 sinPhaseOffsetAdd = sinPhaseOffset * 4.f * stride;
-		float_4 cosPhaseOffsetAdd = cosPhaseOffset * stride;
+		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
 
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 out1BaseAdd = multiples * phaseInc;
@@ -665,7 +665,7 @@ struct Loom : Module {
 			out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
 
 			// Output 2 doesn't use cosine phase partials in odd/even split mode
-			out2PhaseWithoutSync = splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync[i];
+			out2PhaseWithoutSync = splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync;
 
 			// Calculate sin/cos with amplitudes, sum with output
 			out1WithoutSyncSum += simd::ifelse(
