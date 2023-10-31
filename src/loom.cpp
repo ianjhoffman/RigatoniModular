@@ -146,7 +146,9 @@ struct Loom : Module {
 
 		struct HarmStrideQuantity : ParamQuantity {
 			float getDisplayValue() override {
-				return 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
+				Loom* module = reinterpret_cast<Loom*>(this->module);
+				auto val = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
+				return (module->continuousStrideMode == ContinuousStrideMode::OFF) ? std::round(val) : val;
 			}
 		};
 
@@ -237,12 +239,11 @@ struct Loom : Module {
 	std::array<float_4, 16> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float_4> blep;
 	dsp::ClockDivider lightDivider;
-	float lastSync{0.f};
-	ContinuousStrideMode lastContinuousStrideMode{ContinuousStrideMode::OFF};
+	float lastSyncValue{0.f};
 
 	// For custom knob displays to read
 	bool lfoMode{false};
-	bool continuousStride{false};
+	ContinuousStrideMode continuousStrideMode{ContinuousStrideMode::OFF};
 
 	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
 	static int numRelevantBits(uint64_t n) {
@@ -516,30 +517,26 @@ struct Loom : Module {
 	}
 
 	static float_4 drive2(float_4 in, float drive) {
-		constexpr float BASE_SLOPE = 0.31414587743685775f; // 3/8 * (4 - sqrt(10))
-		constexpr float CURVE_SUB = 2.952847075210474f; // (5/2 * sqrt(5/2)) - 1
-		constexpr float Y_SCALE = 0.25f;
+		constexpr float BASE_SLOPE = 0.078536469359214f; // 3/32 * (4 - sqrt(10))
+		constexpr float CURVE_ADD = -0.988211768802619f; // 1/4 - (5/8 * sqrt(5/2))
 		constexpr float X_SCALE = 8.f;
 		constexpr float X_LIMIT = 16.f; // Slope of soft clipping function is 0 at x = 16
-		constexpr float Y_AT_LIMIT = 4.047152924789525f; // 8 - (5/2 * sqrt(5/2))
+		constexpr float Y_AT_LIMIT = 1.011788231197381f; // func(16) = 2 - (5/8 * sqrt(5/2))
 
 		auto x = in * X_SCALE * drive;
 		auto abs = simd::abs(x);
 		auto sign = simd::sgn(x);
 		auto underThreshMask = abs <= 10.f;
-		auto addAmt = -0.25f * sign * simd::pow(abs, float_4(1.5f)) + x - sign * (1.f + CURVE_SUB);
-		auto out = simd::ifelse(underThreshMask, BASE_SLOPE * x, 0.5f * x + addAmt);
-		return Y_SCALE * simd::ifelse(abs >= X_LIMIT, sign * Y_AT_LIMIT, out);
+		auto addAmt = sign * (-0.0625f * simd::pow(abs, float_4(1.5f)) + CURVE_ADD);
+		auto out = simd::ifelse(underThreshMask, BASE_SLOPE * x, 0.375f * x + addAmt);
+		return simd::ifelse(abs >= X_LIMIT, sign * Y_AT_LIMIT, out);
 	}
 
 	void process(const ProcessArgs& args) override {
 		// Read harmonic structure switches
-		float continuousStrideParam = params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue();
-		auto continuousStrideMode = (continuousStrideParam < .5f) ? ContinuousStrideMode::OFF :
-			((continuousStrideParam < 1.5f) ? ContinuousStrideMode::SYNC : ContinuousStrideMode::FREE);
-		bool continuousStrideModeChanged = continuousStrideMode != this->lastContinuousStrideMode;
-		this->lastContinuousStrideMode = continuousStrideMode;
-		this->continuousStride = continuousStrideMode != ContinuousStrideMode::OFF;
+		this->continuousStrideMode = static_cast<ContinuousStrideMode>(
+			(int)params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue()
+		);
 
 		// Read harmonic structure parameters, including attenuverters and CV inputs
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
@@ -554,7 +551,7 @@ struct Loom : Module {
 		float stride = 4.f * clamp(
 			strideScaled + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
 		);
-		if (!this->continuousStride) {
+		if (this->continuousStrideMode == ContinuousStrideMode::OFF) {
 			stride = std::round(stride);
 		}
 		bool strideIsOne = std::abs(stride - 1.f) < .01f; // Reasonable epsilon
@@ -564,9 +561,7 @@ struct Loom : Module {
 		shift = clamp(shift);
 
 		// Calculate fundamental frequency in Hz
-		bool newLfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
-		bool lfoModeChanged = newLfoMode != this->lfoMode;
-		this->lfoMode = newLfoMode;
+		this->lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
 		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
 		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage(), -5.f, 5.f);
 		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
@@ -597,10 +592,11 @@ struct Loom : Module {
 		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], boostFund ? .5f : 0.f);
 
 		// Calculate sync
-		float syncIn = inputs[SYNC_INPUT].getVoltage();
-		float syncCrossing = -this->lastSync / (syncIn - this->lastSync);
-		this->lastSync = syncIn;
-		bool sync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncIn >= 0.f);
+		float syncValue = inputs[SYNC_INPUT].getVoltage();
+		float deltaSync = syncValue - this->lastSyncValue;
+		float syncCrossing = -this->lastSyncValue / deltaSync;
+		this->lastSyncValue = syncValue;
+		bool normalSync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncValue >= 0.f);
 
 		// Additive synthesis params setup
 		bool splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
@@ -616,30 +612,28 @@ struct Loom : Module {
 		float fundPhaseWrapped = fundAccum + phaseInc - 1.f;
 		bool fundSync = fundPhaseWrapped >= 0.f;
 
-		// Calculate this outside the loop to get rid of a bunch of branching
-		// 3 types of sync that can introduce discontinuities
-		bool doSync = true;
-		float syncPhase = fundPhaseWrapped;
+		// 2 types of sync that can introduce discontinuities
+		bool doSync = false;
+		float syncPhase = 0.f;
 		float minBlepP = 0.f;
-		if (continuousStrideModeChanged || lfoModeChanged) {
-			minBlepP = 0.f;
-		} else if (sync) {
+		if (normalSync) {
+			doSync = true;
 			minBlepP = syncCrossing - 1.f;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
+			doSync = true;
 			minBlepP = -(fundPhaseWrapped / phaseInc);
-		} else {
-			doSync = false;
+			syncPhase = fundPhaseWrapped;
 		}
 
+		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
+		// for each output for both synced and unsynced ph
 		std::array<float_4, 16> out1WithoutSync;
 		std::array<float_4, 16> out1WithSync;
 		std::array<float_4, 16> out2WithoutSync;
 		std::array<float_4, 16> out2WithSync;
 		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
 		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
-		auto syncMask = simd::movemaskInverse<float_4>(doSync ? 0b1111 : 0b0000);
-		auto cosPhaseMask = simd::movemaskInverse<float_4>(splitMode ? 0b0000 : 0b1111);
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
 		float_4 ampMult = (float)splitMode + 1.f;
 
@@ -651,7 +645,7 @@ struct Loom : Module {
 
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 out1BaseAdd = multiples * phaseInc;
-		float_4 out1SyncIf = multiples * syncPhase;
+		float_4 out1SyncPhase = multiples * syncPhase;
 		float_4 out1PmAdd = multiples * phaseOffset;
 		float_4 out2PmAdd = multiples * cosPhaseOffset;
 		for (int i = 0; i < 16; i++) {
@@ -659,37 +653,22 @@ struct Loom : Module {
 
 			out1WithoutSync[i] = this->phaseAccumulators[i] + out1BaseAdd;
 			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
-			out1WithSync[i] = simd::ifelse(syncMask, out1SyncIf, out1WithoutSync[i]);
-			out1WithSync[i] -= simd::floor(out1WithSync[i]);
-			this->phaseAccumulators[i] = out1WithSync[i]; // store before doing PM
+			float_4 phaseAccumVal = out1WithoutSync[i]; // store before doing PM
 
 			// Phase modulation
-			out2WithoutSync[i] = out1WithoutSync[i] + out2PmAdd;
-			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
-
-			out2WithSync[i] = out1WithSync[i] + out2PmAdd;
-			out2WithSync[i] -= simd::floor(out2WithSync[i]);
-
 			out1WithoutSync[i] += out1PmAdd;
 			out1WithoutSync[i] -= simd::floor(out1WithoutSync[i]);
 
-			out1WithSync[i] += out1PmAdd;
-			out1WithSync[i] -= simd::floor(out1WithSync[i]);
+			out2WithoutSync[i] = phaseAccumVal + out2PmAdd;
+			out2WithoutSync[i] -= simd::floor(out2WithoutSync[i]);
 
 			// Output 2 doesn't use cosine phase partials in odd/even split mode
-			out2WithoutSync[i] = simd::ifelse(cosPhaseMask, out2WithoutSync[i], out1WithoutSync[i]);
-			out2WithSync[i] = simd::ifelse(cosPhaseMask, out2WithSync[i], out1WithSync[i]);
+			out2WithoutSync[i] = splitMode ? out1WithoutSync[i] : out2WithoutSync[i];
 
 			// Calculate sin/cos with amplitudes, sum with output
 			out1WithoutSyncSum += simd::ifelse(
 				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
 				sin2pi_chebyshev(out1WithoutSync[i]) * overallAmplitude,
-				0.f
-			);
-
-			out1WithSyncSum += simd::ifelse(
-				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out1WithSync[i]) * overallAmplitude,
 				0.f
 			);
 
@@ -699,17 +678,48 @@ struct Loom : Module {
 				0.f
 			);
 
-			out2WithSyncSum += simd::ifelse(
-				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
-				0.f
-			);
+			// It turns out that branching in the loop is significantly faster than branchless
+			if (doSync) {
+				out1WithSync[i] = out1SyncPhase;
+				out1WithSync[i] -= simd::floor(out1WithSync[i]);
+				phaseAccumVal = out1WithSync[i]; // store before doing PM
+
+				// Phase modulation (sync)
+				out1WithSync[i] += out1PmAdd;
+				out1WithSync[i] -= simd::floor(out1WithSync[i]);
+
+				out2WithSync[i] = phaseAccumVal + out2PmAdd;
+				out2WithSync[i] -= simd::floor(out2WithSync[i]);
+
+				// Output 2 doesn't use cosine phase partials in odd/even split mode
+				out2WithSync[i] = splitMode ? out1WithSync[i] : out2WithSync[i];
+
+				out1WithSyncSum += simd::ifelse(
+					this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+					sin2pi_chebyshev(out1WithSync[i]) * overallAmplitude,
+					0.f
+				);
+
+				out2WithSyncSum += simd::ifelse(
+					this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+					sin2pi_chebyshev(out2WithSync[i]) * overallAmplitude,
+					0.f
+				);
+			}
+
+			this->phaseAccumulators[i] = phaseAccumVal;
 
 			// Update progressive phase multiple calculations
 			out1BaseAdd += phaseIncAdd;
-			out1SyncIf += syncPhaseAdd;
+			out1SyncPhase += syncPhaseAdd;
 			out1PmAdd += sinPhaseOffsetAdd;
 			out2PmAdd += cosPhaseOffsetAdd;
+		}
+
+		// We weren't updating these in the loop so set them here
+		if (!doSync) {
+			out1WithSyncSum = out1WithoutSyncSum;
+			out2WithSyncSum = out2WithoutSyncSum;
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
@@ -720,7 +730,7 @@ struct Loom : Module {
 
 		// Fundamental and square outs are a lot easier
 		auto fundPhaseWithoutSync = out1WithoutSync[0][0];
-		auto fundPhaseWithSync = out1WithSync[0][0];
+		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
 		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
 		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
 		auto squareOutWithoutSync = simd::ifelse(fundPhaseWithoutSync < 0.5f, 1.f, -1.f);

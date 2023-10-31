@@ -2,7 +2,7 @@
 RACK_DIR ?= ../..
 
 # FLAGS will be passed to both the C and C++ compiler
-FLAGS += -O2
+FLAGS += -O3
 #FLAGS += 
 CFLAGS +=
 CXXFLAGS +=
