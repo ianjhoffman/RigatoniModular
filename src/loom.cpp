@@ -347,6 +347,7 @@ struct Loom : Module {
 		float stride,  // 0-4
 		float shift    // 0-1
 	) {
+		// TODO - fade out harmonics better, consider lowering harmonic limit to be based off of 20kHz
 		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
 		int harmonicLimit = harmonicMultipleLimit / std::fmax(stride, 0.1f);
 		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
@@ -451,6 +452,10 @@ struct Loom : Module {
 		return harmonicMask;
 	}
 
+	// TODO: add spectral shaping back after resolving aliasing issues, and once
+	// I've decided how I want the final spectral shaping feature to work
+
+	/*
 	inline static std::pair<float, float> calculatePivotSlopes(int tilt) {
 		return (tilt == 0) ? std::make_pair(0.1f, -2.f)
 			: ((tilt == 1) ? std::make_pair(-3.f, -3.f)
@@ -485,6 +490,7 @@ struct Loom : Module {
 			shiftAmt -= 4;
 		}
 	}
+	*/
 
 	static float scaleLength(float normalized) {
 		auto pow = (normalized <= 0.2f) ? (10.f * normalized) : (5.f * normalized + 1.f);
@@ -516,6 +522,7 @@ struct Loom : Module {
 		return simd::ifelse(underThreshMask, in, in - subAmt);
 	}
 
+	// Cubic soft clipping with no foldback
 	static float_4 drive2(float_4 in, float drive) {
 		constexpr float BASE_SLOPE = 0.078536469359214f; // 3/32 * (4 - sqrt(10))
 		constexpr float CURVE_ADD = -0.988211768802619f; // 1/4 - (5/8 * sqrt(5/2))
@@ -580,6 +587,11 @@ struct Loom : Module {
 			harmonicAmplitudes, harmonicMultipleLimit, length, density, stride, shift
 		);
 
+		// TODO: add spectral shaping back after resolving aliasing issues, and once
+		// I've decided how I want the final spectral shaping feature to work
+
+		/*
+
 		// Spectral shaping
 		float pivot = clamp(params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage());
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
@@ -590,6 +602,8 @@ struct Loom : Module {
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
 		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], boostFund ? .5f : 0.f);
+
+		*/
 
 		// Calculate sync
 		float syncValue = inputs[SYNC_INPUT].getVoltage();
