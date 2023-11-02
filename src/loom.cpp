@@ -341,17 +341,13 @@ struct Loom : Module {
 
 	int setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
-		float harmonicMultipleLimit,
+		int harmonicLimit,
 		float length,  // 1-64
 		float density, // 0-1
 		float stride,  // 0-4
 		float shift    // 0-1
 	) {
-		// TODO - fade out harmonics better, consider lowering harmonic limit to be based off of 20kHz
-		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns
-		int harmonicLimit = harmonicMultipleLimit / std::fmax(stride, 0.1f);
 		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
-
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
 		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
@@ -576,15 +572,18 @@ struct Loom : Module {
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
 		float freq = Loom::calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
 
-		// Some simple built-in band-limiting (not perfect because of
-		// drive, fm, pm, all of which can introduce extra harmonics)
+		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns.
+		// This functions as simple built-in band-limiting (not perfect because of drive, fm, pm,
+		// all of which can introduce extra harmonics). N = ((sample_rate / 2*freq) - 1) / stride
 		auto freq2Recip = simd::rcp(2.f * std::abs(freq)); // TZFM can make frequency negative
 		float harmonicMultipleLimit = args.sampleRate * freq2Recip[0] - 1.f;
+		float clampedStride = std::fmax(stride, 0.1f);
+		int harmonicLimit = harmonicMultipleLimit / clampedStride;
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
 		int numBlocks = this->setAmplitudes(
-			harmonicAmplitudes, harmonicMultipleLimit, length, density, stride, shift
+			harmonicAmplitudes, harmonicLimit, length, density, stride, shift
 		);
 
 		// TODO: add spectral shaping back after resolving aliasing issues, and once
@@ -625,6 +624,10 @@ struct Loom : Module {
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
+		float scale = phaseInc * clampedStride;
+		float scaledLimit = harmonicMultipleLimit * scale;
+		float_4 scaledHarmonicLowerBound = scaledLimit * .75f;
+		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale);
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccum = this->phaseAccumulators[0][0];
@@ -646,7 +649,7 @@ struct Loom : Module {
 		}
 
 		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
-		// for each output for both synced and unsynced ph
+		// for each output for both synced and unsynced sine and cosine
 		std::array<float_4, 16> out1PhaseWithoutSync;
 		int oddHarmSplitMaskIdx = splitMode ? 1 : 0;
 		int evenHarmSplitMaskIdx = splitMode ? 2 : 0;
@@ -660,18 +663,24 @@ struct Loom : Module {
 		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
 
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
-		float_4 out1BaseAdd = multiples * phaseInc;
+		float_4 basePhaseInc = multiples * phaseInc;
 		float_4 out1SyncPhase = multiples * syncPhase;
 		float_4 out1PmAdd = multiples * sinPhaseOffset;
 		float_4 out2PmAdd = multiples * cosPhaseOffset;
+		float_4 overallAmplitude;
 		for (int i = 0; i < 16; i++) {
-			float_4 overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
-
-			out1PhaseWithoutSync[i] = this->phaseAccumulators[i] + out1BaseAdd;
+			// Always update phase accumulators
+			out1PhaseWithoutSync[i] = this->phaseAccumulators[i] + basePhaseInc;
 			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
 			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
 
 			if (i < numBlocks) {
+				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
+				// Harmonic falloff between ~.75x and ~1x Nyquist
+				overallAmplitude *= simd::clamp(
+					1.f + (basePhaseInc - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
+				);
+				
 				// Phase modulation
 				out1PhaseWithoutSync[i] += out1PmAdd;
 				out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
@@ -730,7 +739,7 @@ struct Loom : Module {
 			this->phaseAccumulators[i] = phaseAccumVal;
 
 			// Update progressive phase multiple calculations
-			out1BaseAdd += phaseIncAdd;
+			basePhaseInc += phaseIncAdd;
 			out1SyncPhase += syncPhaseAdd;
 			out1PmAdd += sinPhaseOffsetAdd;
 			out2PmAdd += cosPhaseOffsetAdd;
@@ -758,8 +767,8 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		//mainOutsPacked = Loom::drive(mainOutsPacked, drive);
-		mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
+		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		//mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
