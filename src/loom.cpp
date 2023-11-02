@@ -339,7 +339,7 @@ struct Loom : Module {
 		}
 	}
 
-	uint64_t setAmplitudes(
+	int setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		float harmonicMultipleLimit,
 		float length,  // 1-64
@@ -449,7 +449,7 @@ struct Loom : Module {
 			}
 		}
 
-		return harmonicMask;
+		return numBlocks;
 	}
 
 	// TODO: add spectral shaping back after resolving aliasing issues, and once
@@ -583,7 +583,7 @@ struct Loom : Module {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		this->setAmplitudes(
+		int numBlocks = this->setAmplitudes(
 			harmonicAmplitudes, harmonicMultipleLimit, length, density, stride, shift
 		);
 
@@ -671,28 +671,30 @@ struct Loom : Module {
 			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
 			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
 
-			// Phase modulation
-			out1PhaseWithoutSync[i] += out1PmAdd;
-			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
+			if (i < numBlocks) {
+				// Phase modulation
+				out1PhaseWithoutSync[i] += out1PmAdd;
+				out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
 
-			float_4 out2PhaseWithoutSync = phaseAccumVal + out2PmAdd;
-			out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
+				float_4 out2PhaseWithoutSync = phaseAccumVal + out2PmAdd;
+				out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
 
-			// Output 2 doesn't use cosine phase partials in odd/even split mode
-			out2PhaseWithoutSync = splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync;
+				// Output 2 doesn't use cosine phase partials in odd/even split mode
+				out2PhaseWithoutSync = splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync;
 
-			// Calculate sin/cos with amplitudes, sum with output
-			out1WithoutSyncSum += simd::ifelse(
-				this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
-				0.f
-			);
+				// Calculate sin/cos with amplitudes, sum with output
+				out1WithoutSyncSum += simd::ifelse(
+					this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+					sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
+					0.f
+				);
 
-			out2WithoutSyncSum += simd::ifelse(
-				this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-				sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
-				0.f
-			);
+				out2WithoutSyncSum += simd::ifelse(
+					this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+					sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
+					0.f
+				);
+			}
 
 			// It turns out that branching in the loop is significantly faster than branchless
 			if (doSync) {
@@ -700,27 +702,29 @@ struct Loom : Module {
 				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
 				phaseAccumVal = out1PhaseWithSync; // store before doing PM
 
-				// Phase modulation (sync)
-				out1PhaseWithSync += out1PmAdd;
-				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
+				if (i < numBlocks) {
+					// Phase modulation (sync)
+					out1PhaseWithSync += out1PmAdd;
+					out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
 
-				float_4 out2PhaseWithSync = phaseAccumVal + out2PmAdd;
-				out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
+					float_4 out2PhaseWithSync = phaseAccumVal + out2PmAdd;
+					out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
 
-				// Output 2 doesn't use cosine phase partials in odd/even split mode
-				out2PhaseWithSync = splitMode ? out1PhaseWithSync : out2PhaseWithSync;
+					// Output 2 doesn't use cosine phase partials in odd/even split mode
+					out2PhaseWithSync = splitMode ? out1PhaseWithSync : out2PhaseWithSync;
 
-				out1WithSyncSum += simd::ifelse(
-					this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
-					sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
-					0.f
-				);
+					out1WithSyncSum += simd::ifelse(
+						this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+						sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
+						0.f
+					);
 
-				out2WithSyncSum += simd::ifelse(
-					this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
-					sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
-					0.f
-				);
+					out2WithSyncSum += simd::ifelse(
+						this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+						sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
+						0.f
+					);
+				}
 			}
 
 			this->phaseAccumulators[i] = phaseAccumVal;
