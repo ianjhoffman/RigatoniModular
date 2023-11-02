@@ -339,7 +339,7 @@ struct Loom : Module {
 		}
 	}
 
-	int setAmplitudes(
+	std::pair<int, uint64_t> setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		int harmonicLimit,
 		float length,  // 1-64
@@ -445,13 +445,9 @@ struct Loom : Module {
 			}
 		}
 
-		return numBlocks;
+		return {numBlocks, harmonicMask};
 	}
 
-	// TODO: add spectral shaping back after resolving aliasing issues, and once
-	// I've decided how I want the final spectral shaping feature to work
-
-	/*
 	inline static std::pair<float, float> calculatePivotSlopes(int tilt) {
 		return (tilt == 0) ? std::make_pair(0.1f, -2.f)
 			: ((tilt == 1) ? std::make_pair(-3.f, -3.f)
@@ -461,6 +457,7 @@ struct Loom : Module {
 	static void shapeAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		uint64_t harmonicMask,
+		int numBlocks,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
 		float pivot,
@@ -469,13 +466,13 @@ struct Loom : Module {
 		float pivotHarm = Loom::scaleLength(pivot) - 1.f;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
-		float belowSlope = std::get<0>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
-		float aboveSlope = std::get<1>(slopes) * Loom::SLOPE_SCALE * slopeMultiplier;
+		float belowSlope = slopes.first * Loom::SLOPE_SCALE * slopeMultiplier;
+		float aboveSlope = slopes.second * Loom::SLOPE_SCALE * slopeMultiplier;
 		float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(intensity * 2.f));
 		float_4 indices = {0.f, 1.f, 2.f, 3.f};
 		auto shiftAmt = Loom::AMP_SHIFT;
 		harmonicMask = Loom::flipNibbleEndian(harmonicMask);
-		for (int i = 0; i < 16; i++) {
+		for (int i = 0; i < numBlocks; i++) {
 			float_4 diffs = pivotHarm - indices;
 			float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
 			auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & Loom::AMP_MASK);
@@ -486,7 +483,6 @@ struct Loom : Module {
 			shiftAmt -= 4;
 		}
 	}
-	*/
 
 	static float scaleLength(float normalized) {
 		auto pow = (normalized <= 0.2f) ? (10.f * normalized) : (5.f * normalized + 1.f);
@@ -582,23 +578,18 @@ struct Loom : Module {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		int numBlocks = this->setAmplitudes(
+		auto setAmplitudesRet = this->setAmplitudes(
 			harmonicAmplitudes, harmonicLimit, length, density, stride, shift
 		);
-
-		// TODO: add spectral shaping back after resolving aliasing issues, and once
-		// I've decided how I want the final spectral shaping feature to work
-
-		/*
+		int numBlocks = setAmplitudesRet.first;
+		uint64_t harmonicMask = setAmplitudesRet.second;
 
 		// Spectral shaping
 		float pivot = clamp(params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage());
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
-		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, length, tilt, pivot, intensity);
-		
-		*/
+		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivot, intensity);
 
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
@@ -767,8 +758,8 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
-		//mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
+		//mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
