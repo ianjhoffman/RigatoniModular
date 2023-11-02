@@ -314,9 +314,9 @@ struct Loom : Module {
 	}
 
 	inline uint64_t getShiftedPattern(uint64_t mask, int length, int density, int shift) {
-		auto pattern = mask & this->patternTable[length - 1][density];
+		auto pattern = this->patternTable[length - 1][density];
 		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
-		return Loom::flipNibbleEndian(shifted);
+		return Loom::flipNibbleEndian(shifted & mask);
 	}
 
 	void populateHarmonicSplitMasks() {
@@ -354,7 +354,7 @@ struct Loom : Module {
 
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
-		int numBlocks = 0b1 | ((std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2);
+		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
 		float lengthFade = length - iLengthLow;
 
 		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
@@ -583,7 +583,7 @@ struct Loom : Module {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		auto harmonicMask = this->setAmplitudes(
+		this->setAmplitudes(
 			harmonicAmplitudes, harmonicMultipleLimit, length, density, stride, shift
 		);
 
@@ -599,11 +599,11 @@ struct Loom : Module {
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv, -1.f, 1.f);
 		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, length, tilt, pivot, intensity);
 		
+		*/
+
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
 		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], boostFund ? .5f : 0.f);
-
-		*/
 
 		// Calculate sync
 		float syncValue = inputs[SYNC_INPUT].getVoltage();
@@ -754,8 +754,8 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
-		//mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
+		//mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
