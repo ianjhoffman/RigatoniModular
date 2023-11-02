@@ -138,16 +138,10 @@ struct Loom : Module {
 			}
 		};
 
-		struct HarmCountQuantity : ParamQuantity {
-			float getDisplayValue() override {
-				return scaleLength(ParamQuantity::getDisplayValue());
-			}
-		};
-
 		struct HarmStrideQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				auto val = 4.f * scaleStrideKnobValue(ParamQuantity::getDisplayValue());
+				auto val = ParamQuantity::getDisplayValue();
 				return (module->continuousStrideMode == ContinuousStrideMode::OFF) ? std::round(val) : val;
 			}
 		};
@@ -155,11 +149,11 @@ struct Loom : Module {
 		// Control Knobs
 		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
-		configParam<HarmCountQuantity>(HARM_COUNT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Count", " Partials");
+		configParam(HARM_COUNT_KNOB_PARAM, -2.f, 2.f, -2.f, "Harmonic Count", " Partials", 2.f, 16.8, -3.2);
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
-		configParam<HarmStrideQuantity>(HARM_STRIDE_KNOB_PARAM, 0.f, 1.f, 1.f/3.f, "Harmonic Stride", "x");
+		configParam<HarmStrideQuantity>(HARM_STRIDE_KNOB_PARAM, 0.f, 2.f, 0.807354922f, "Harmonic Stride", "x", 2.f, 1.333333333333f, -1.333333333333f);
 		configParam(HARM_SHIFT_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Shift");
-		configParam(SPECTRAL_PIVOT_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Pivot");
+		configParam(SPECTRAL_PIVOT_KNOB_PARAM, -2.f, 2.f, -2.f, "Spectral Shaping Pivot", "/64", 2.f, 16.8, -3.2);
 		configParam(SPECTRAL_INTENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Spectral Shaping Intensity");
 		configParam(DRIVE_KNOB_PARAM, 0.f, 2.f, 1.f, "Drive");
 
@@ -460,10 +454,9 @@ struct Loom : Module {
 		int numBlocks,
 		float length,
 		int tilt, // 0-2 (lowpass, bandpass, highpass)
-		float pivot,
+		float pivotHarm,
 		float intensity
 	) {
-		float pivotHarm = Loom::scaleLength(pivot) - 1.f;
 		auto slopes = Loom::calculatePivotSlopes(tilt);
 		float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
 		float belowSlope = slopes.first * Loom::SLOPE_SCALE * slopeMultiplier;
@@ -484,13 +477,12 @@ struct Loom : Module {
 		}
 	}
 
-	static float scaleLength(float normalized) {
-		auto pow = (normalized <= 0.2f) ? (10.f * normalized) : (5.f * normalized + 1.f);
-		return clamp(dsp::exp2_taylor5(pow), 1.f, 64.f);
+	static float scaleLength(float knobValue) {
+		return clamp(dsp::exp2_taylor5(knobValue) * 16.8f - 3.2f, 1.f, 64.f);
 	}
 
-	static float scaleStrideKnobValue(float knob) {
-		return (knob <= 2.f/3.f) ? ((3.f/4.f) * knob) : ((1.5f * knob) - .5f);
+	static float scaleStride(float knobValue) {
+		return clamp(dsp::exp2_taylor5(knobValue) * 1.333333333333f - 1.333333333333f, 0.f, 4.f);
 	}
 
 	static float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
@@ -539,20 +531,17 @@ struct Loom : Module {
 
 		// Read harmonic structure parameters, including attenuverters and CV inputs
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
-		length += 0.2f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getVoltage();
-		length = Loom::scaleLength(clamp(length));
+		length += 0.4f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getVoltage();
+		length = Loom::scaleLength(clamp(length, -2.f, 2.f));
 
 		float density = params[HARM_DENSITY_KNOB_PARAM].getValue();
 		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getVoltage();
 		density = clamp(density);
 
-		float strideScaled = Loom::scaleStrideKnobValue(params[HARM_STRIDE_KNOB_PARAM].getValue());
-		float stride = 4.f * clamp(
-			strideScaled + 0.1f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage()
-		);
-		if (this->continuousStrideMode == ContinuousStrideMode::OFF) {
-			stride = std::round(stride);
-		}
+		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
+		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage();
+		stride = Loom::scaleStride(clamp(stride, 0.f, 2.f));
+		if (this->continuousStrideMode == ContinuousStrideMode::OFF) stride = std::round(stride);
 		bool strideIsOne = std::abs(stride - 1.f) < .01f; // Reasonable epsilon
 
 		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
@@ -585,11 +574,13 @@ struct Loom : Module {
 		uint64_t harmonicMask = setAmplitudesRet.second;
 
 		// Spectral shaping
-		float pivot = clamp(params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage());
+		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue();
+		pivotHarm += 0.4f * inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage();
+		pivotHarm = Loom::scaleLength(clamp(pivotHarm, -2.f, 2.f)) - 1.f;
 		float tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = clamp(params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv);
-		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivot, intensity);
+		Loom::shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivotHarm, intensity);
 
 		// Fundamental boosting
 		bool boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
