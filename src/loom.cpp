@@ -498,8 +498,10 @@ struct Loom : Module {
 		return std::min(freq, Loom::MAX_FREQ);
 	}
 
+	/*
+
 	// Soft clipping (quadratic) drive with a small amount of wave folding at the extreme
-	static float_4 drive(float_4 in, float drive) {
+	static float_4 drive2(float_4 in, float drive) {
 		// Don't hit the folder as hard, up to 12 o'clock on the drive knob should almost never clip
 		in *= drive * .5f;
 		auto overThresh = simd::abs(in) - .9f;
@@ -509,7 +511,7 @@ struct Loom : Module {
 	}
 
 	// Cubic soft clipping with no foldback
-	static float_4 drive2(float_4 in, float drive) {
+	static float_4 drive3(float_4 in, float drive) {
 		constexpr float BASE_SLOPE = 0.078536469359214f; // 3/32 * (4 - sqrt(10))
 		constexpr float CURVE_ADD = -0.988211768802619f; // 1/4 - (5/8 * sqrt(5/2))
 		constexpr float X_SCALE = 8.f;
@@ -523,6 +525,18 @@ struct Loom : Module {
 		auto addAmt = sign * (-0.0625f * simd::pow(abs, float_4(1.5f)) + CURVE_ADD);
 		auto out = simd::ifelse(underThreshMask, BASE_SLOPE * x, 0.375f * x + addAmt);
 		return simd::ifelse(abs >= X_LIMIT, sign * Y_AT_LIMIT, out);
+	}
+
+	*/
+
+	// Quadratic soft clipping with no foldback
+	static float_4 drive(float_4 in, float drive) {
+		in *= drive * .5f;
+		auto abs = simd::abs(in);
+		auto sign = simd::sgn(in);
+		auto absShifted = abs - 2.f;
+		auto out = simd::ifelse(abs <= 1.f, in, sign * (1.5f - 0.5f * absShifted * absShifted));
+		return simd::ifelse(abs >= 2.f, 1.5f * sign, out);
 	}
 
 	void process(const ProcessArgs& args) override {
@@ -751,8 +765,7 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		//mainOutsPacked = Loom::drive(mainOutsPacked, drive);
-		mainOutsPacked = Loom::drive2(mainOutsPacked, drive);
+		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
 
 		// BLEP
 		if (doSync) {
@@ -805,7 +818,7 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBigBlackKnob>(mm2px(Vec(77.059, 22.274)), module, Loom::HARM_COUNT_KNOB_PARAM));
 
 		// Regular knobs
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 39.468)), module, Loom::FINE_TUNE_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 41.867)), module, Loom::FINE_TUNE_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 45.34)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 62.86)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 81.46)), module, Loom::HARM_STRIDE_KNOB_PARAM));
@@ -820,14 +833,14 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 73.843)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 82.006)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 61.698)), module, Loom::DRIVE_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.073, 41.338)), module, Loom::PM_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(39.881, 41.338)), module, Loom::FM_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.073, 41.867)), module, Loom::PM_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(39.881, 41.867)), module, Loom::FM_ATTENUVERTER_PARAM));
 
 		// Vertical switches
-		addParam(createParamCentered<CKSS>(mm2px(Vec(5.787, 20.368)), module, Loom::RANGE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 42.315)), module, Loom::BOOST_FUNDAMENTAL_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 64.225)), module, Loom::OUTPUT_MODE_SWITCH_PARAM));
-		addParam(createParamCentered<CKSS>(mm2px(Vec(39.881, 20.552)), module, Loom::LIN_EXP_FM_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(8.695, 20.368)), module, Loom::RANGE_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 41.279)), module, Loom::BOOST_FUNDAMENTAL_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(55.972, 63.188)), module, Loom::OUTPUT_MODE_SWITCH_PARAM));
+		addParam(createParamCentered<CKSS>(mm2px(Vec(39.747, 20.552)), module, Loom::LIN_EXP_FM_SWITCH_PARAM));
 		addParam(createParamCentered<CKSSThree>(mm2px(Vec(39.777, 81.893)), module, Loom::SPECTRAL_TILT_SWITCH_PARAM));
 
 		// Horizontal switches
@@ -854,18 +867,18 @@ struct LoomWidget : ModuleWidget {
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(83.855, 111.249)), module, Loom::EVEN_NINETY_DEGREE_OUTPUT));
 
 		// Multi-colored LEDs
-		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(13.583, 13.071)), module, Loom::OSCILLATOR_LED_LIGHT_GREEN));
+		addChild(createLightCentered<MediumLight<GreenRedLight>>(mm2px(Vec(33.4, 12.621)), module, Loom::OSCILLATOR_LED_LIGHT_GREEN));
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(75.410, 74.791)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.752, 51.718)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.832, 51.718)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.912, 51.718)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.992, 51.718)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(33.072, 51.718)), module, Loom::S_LED_5_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(37.152, 51.718)), module, Loom::S_LED_6_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(41.232, 51.718)), module, Loom::S_LED_7_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(45.312, 51.718)), module, Loom::S_LED_8_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(4.233, 73.4)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(8.313, 73.4)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.393, 73.4)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.473, 73.4)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.553, 73.4)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 73.4)), module, Loom::S_LED_6_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 73.4)), module, Loom::S_LED_7_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 73.4)), module, Loom::S_LED_8_LIGHT));
 	}
 };
 
