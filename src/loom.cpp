@@ -1,4 +1,5 @@
 #include "plugin.hpp"
+#include "waveshaping/DistortionADAA1.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -218,6 +219,9 @@ struct Loom : Module {
 	static constexpr float LIN_FM_FACTOR = 5.f;
 	static constexpr float MAX_FREQ = 10240.f;
 	static constexpr float SLOPE_SCALE = 0.01f;
+
+	// Anti-aliased distortion processor
+	QuadraticDistortionADAA1<float_4> distortion;
 
 	// All Euclidean pattern bitmasks for each length; inner index is density
 	std::array<std::vector<uint64_t>, 64> patternTable{};
@@ -498,47 +502,6 @@ struct Loom : Module {
 		return std::min(freq, Loom::MAX_FREQ);
 	}
 
-	/*
-
-	// Soft clipping (quadratic) drive with a small amount of wave folding at the extreme
-	static float_4 drive2(float_4 in, float drive) {
-		// Don't hit the folder as hard, up to 12 o'clock on the drive knob should almost never clip
-		in *= drive * .5f;
-		auto overThresh = simd::abs(in) - .9f;
-		auto underThreshMask = overThresh < 0.f;
-		auto subAmt = overThresh * overThresh * drive * simd::sgn(in);
-		return simd::ifelse(underThreshMask, in, in - subAmt);
-	}
-
-	// Cubic soft clipping with no foldback
-	static float_4 drive3(float_4 in, float drive) {
-		constexpr float BASE_SLOPE = 0.078536469359214f; // 3/32 * (4 - sqrt(10))
-		constexpr float CURVE_ADD = -0.988211768802619f; // 1/4 - (5/8 * sqrt(5/2))
-		constexpr float X_SCALE = 8.f;
-		constexpr float X_LIMIT = 16.f; // Slope of soft clipping function is 0 at x = 16
-		constexpr float Y_AT_LIMIT = 1.011788231197381f; // func(16) = 2 - (5/8 * sqrt(5/2))
-
-		auto x = in * X_SCALE * drive;
-		auto abs = simd::abs(x);
-		auto sign = simd::sgn(x);
-		auto underThreshMask = abs <= 10.f;
-		auto addAmt = sign * (-0.0625f * simd::pow(abs, float_4(1.5f)) + CURVE_ADD);
-		auto out = simd::ifelse(underThreshMask, BASE_SLOPE * x, 0.375f * x + addAmt);
-		return simd::ifelse(abs >= X_LIMIT, sign * Y_AT_LIMIT, out);
-	}
-
-	*/
-
-	// Quadratic soft clipping with no foldback
-	static float_4 drive(float_4 in, float drive) {
-		in *= drive * .5f;
-		auto abs = simd::abs(in);
-		auto sign = simd::sgn(in);
-		auto absShifted = abs - 2.f;
-		auto out = simd::ifelse(abs <= 1.f, in, sign * (1.5f - 0.5f * absShifted * absShifted));
-		return simd::ifelse(abs >= 2.f, 1.5f * sign, out);
-	}
-
 	void process(const ProcessArgs& args) override {
 		// Read harmonic structure switches
 		this->continuousStrideMode = static_cast<ContinuousStrideMode>(
@@ -765,7 +728,7 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		mainOutsPacked = Loom::drive(mainOutsPacked, drive);
+		mainOutsPacked = this->distortion.process(mainOutsPacked * 0.5f * drive);
 
 		// BLEP
 		if (doSync) {
