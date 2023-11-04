@@ -34,21 +34,45 @@ struct WaveshapingADAA1 {
 };
 
 template<typename T>
+struct HardClipDistortionADAA1 : WaveshapingADAA1<T, HardClipDistortionADAA1<T>> {
+    /*
+     * The hard clipping transform is implemented as:
+     *
+     *                    x  , |x| <= 1
+     *               sgn(x)  , otherwise
+     *
+     * and its first antiderivative is:
+     * 
+     *              (x^2)/2  , |x| <= 1
+     *     sgn(x) * x - 0.5  , otherwise
+     */
+    static T transform(T input) {
+        T abs = simd::abs(input);
+		T sign = simd::sgn(input);
+        return simd::ifelse(abs <= T(1), input, sign);
+    }
+
+    static T transformAD1(T input) {
+        T abs = simd::abs(input);
+		T sign = simd::sgn(input);
+        return simd::ifelse(abs <= T(1), input * input * T(0.5), input * sign - T(0.5));
+    }
+};
+
+template<typename T>
 struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T>> {
     /*
-     * This quadratic distortion is implemented as:
+     * This quadratic distortion transform is implemented as:
      *
-     *                       sgn(x)*1.5  , |x| >= 2
-     *                                x  , |x| <= 1
-     *                -1.5 + (-x - 2)^2  , 1 < x < 2
-     *                  1.5 - (x - 2)^2  , -2 < x < -1
+     *                               sgn(x)*1.5  , |x| >= 2
+     *                                        x  , |x| <= 1
+     *         sgn(x) * (1.5 + 0.5*(|x| - 2)^2)  , otherwise
      *
-     * so the antiderivative is:
+     * and its first antiderivative is:
      * 
-     *                1.5x*sgn(x) - 4/3  , |x| >= 2
-     *                          (x^2)/2  , |x| <= 1
-     *      (x^3)/3 + 2x^2 + 2.5x + 4/3  , x < 0
-     *     -(x^3)/3 + 2x^2 - 2.5x + 4/3  , x >= 0
+     *                        1.5x*sgn(x) - 1/6  , |x| >= 2
+     *                                  (x^2)/2  , |x| <= 1
+     *     1/6 + x^2 - sgn(x) * ((x^3)/6 + x/2)  , otherwise
      */
     static T transform(T input) {
 		T abs = simd::abs(input);
@@ -63,11 +87,11 @@ struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T
 		T sign = simd::sgn(input);
         T input2 = input * input;
         T input3 = input2 * input;
-        T out = simd::ifelse(abs >= T(2), T(1.5) * sign * input - T(1.33333333333), input2 * T(0.5));
+        T out = simd::ifelse(abs >= T(2), T(1.5) * sign * input - T(0.1666666666), input2 * T(0.5));
         return simd::ifelse(
             abs <= T(1),
             out,
-            T(1.33333333333) + (T(2) * input2) - sign * (T(0.33333333333) * input3 + T(2.5) * input)
+            T(0.1666666666) + input2 - sign * (T(0.1666666666) * input3 + T(0.5) * input)
         );
     }
 };
