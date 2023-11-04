@@ -1,18 +1,19 @@
-#include "DistortionADAA1.hpp"
+#include "rack.hpp"
+#include "WaveshapingADAA1.hpp"
 
-#include <rack.hpp>
+using namespace rack;
 
 constexpr float DIFF_LIMIT = 1e-5;
 
-template<typename T>
-T DistortionADAA1<T>::process(T input) {
+template<typename T, class S>
+T WaveshapingADAA1<T, S>::process(T input) {
     T diff = input - this->lastInput;
     T fallback = simd::abs(diff) < DIFF_LIMIT;
-    T currAntiderivative = this->antiderivative(input);
+    T currAntiderivative = getAD(input);
     T ret = simd::ifelse(
         fallback,
         T(0.5) * (input + this->lastInput),
-        (currAntiderivative - this->lastAntiderivative) * simd::rcp(diff);
+        (currAntiderivative - this->lastAntiderivative) * simd::rcp(diff)
     );
     
     this->lastInput = input;
@@ -36,7 +37,7 @@ T DistortionADAA1<T>::process(T input) {
  *     -(x^3)/3 + 2x^2 - 2.5x + 4/3  , x >= 0
  */
 template<typename T>
-T QuadraticDistortionADAA1<T>::antiderivative(T input) {
+T quadraticDistortionAD(T input) {
     	T abs = simd::abs(input);
 		T sign = simd::sgn(input);
         T input2 = input * input;

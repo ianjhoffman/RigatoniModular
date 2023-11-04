@@ -1,10 +1,10 @@
 #include "plugin.hpp"
-#include "waveshaping/DistortionADAA1.hpp"
+#include "waveshaping/WaveshapingADAA1.hpp"
+#include "sequencer/EuclideanPatternGenerator.hpp"
 
 #include <algorithm>
 #include <climits>
 #include <cmath>
-#include <tuple>
 #include <utility>
 
 using simd::float_4;
@@ -206,7 +206,6 @@ struct Loom : Module {
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
 
 		// Set up everything pre-cached/pre-allocated
-		this->populatePatternTable();
 		this->populateHarmonicSplitMasks();
 		this->calculateBaseAmplitudes();
 		this->phaseAccumulators.fill(0.f);
@@ -220,14 +219,11 @@ struct Loom : Module {
 	static constexpr float MAX_FREQ = 10240.f;
 	static constexpr float SLOPE_SCALE = 0.01f;
 
-	// Anti-aliased distortion processor
-	QuadraticDistortionADAA1<float_4> distortion;
+	// Anti-aliased drive processor
+	QuadraticDistortionADAA1<float_4> driveProcessor{};
 
-	// All Euclidean pattern bitmasks for each length; inner index is density
-	std::array<std::vector<uint64_t>, 64> patternTable{};
-
-	// Masks for shifting sequences of each length
-	std::array<uint64_t, 64> lengthMasks;
+	// Euclidean pattern generator/storage
+	EuclideanPatternGenerator<64> patternGenerator;
 
 	// Masks for which harmonics go to which output, based on output mode
 	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
@@ -245,65 +241,6 @@ struct Loom : Module {
 	bool lfoMode{false};
 	ContinuousStrideMode continuousStrideMode{ContinuousStrideMode::OFF};
 
-	// https://stackoverflow.com/questions/994593/how-to-do-an-integer-log2-in-c
-	static int numRelevantBits(uint64_t n) {
-		if (n == 0) return 1;
-		#define S(k) if (n >= (UINT64_C(1) << k)) { i += k; n >>= k; }
-		int i = -(n == 0); S(32); S(16); S(8); S(4); S(2); S(1); return i + 1;
-		#undef S
-	}
-
-	inline static uint64_t concatenateBitmasks(uint64_t a, uint64_t b) {
-		return (a << Loom::numRelevantBits(b)) | b;
-	}
-
-	// Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
-	static uint64_t calculateEuclideanBitmask(int length, int density) {
-		if (length == density) return 0xffffffffffffffff << (64 - length);
-
-		std::vector<uint64_t> ons(density, 1);
-		std::vector<uint64_t> offs(length - density, 0);
-		while (offs.size() > 1) {
-			int numCombinations = std::min(ons.size(), offs.size());
-			std::vector<uint64_t> combined{};
-			for (int i = 0; i < numCombinations; i++) {
-				combined.push_back(Loom::concatenateBitmasks(ons[i], offs[i]));
-			}
-
-			if (ons.size() > offs.size()) {
-				// Remaining ons become offs
-				offs = std::vector<uint64_t>(ons.begin() + offs.size(), ons.end());
-			} else if (ons.size() < offs.size()) {
-				// Remaining offs stay offs
-				offs = std::vector<uint64_t>(offs.begin() + ons.size(), offs.end());
-			} else {
-				offs.clear();
-			}
-
-			ons = combined;
-		}
-
-		uint64_t accum = 0;
-		for (auto &&onPattern : ons) {
-			accum = Loom::concatenateBitmasks(accum, onPattern);
-		}
-		for (auto &&offPattern : offs) {
-			accum = Loom::concatenateBitmasks(accum, offPattern);
-		}
-
-		// Make first step of pattern the most significant bit
-		return accum << (64 - length);
-	}
-
-	void populatePatternTable() {
-		for (int length = 1; length <= 64; length++) {
-			for (int density = 1; density <= length; density++) {
-				this->patternTable[length - 1].push_back(Loom::calculateEuclideanBitmask(length, density));
-			}
-			this->lengthMasks[length - 1] = 0xffffffffffffffff << (64 - length);
-		}
-	}
-
 	// Swap order of every 4-bit chunk
 	inline static uint64_t flipNibbleEndian(uint64_t a) {
 		uint64_t out = (a & 0x8888888888888888) >> 3; // 3 to 0
@@ -313,10 +250,10 @@ struct Loom : Module {
 		return out;
 	}
 
-	inline uint64_t getShiftedPattern(uint64_t mask, int length, int density, int shift) {
-		auto pattern = this->patternTable[length - 1][density];
-		auto shifted = ((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
-		return Loom::flipNibbleEndian(shifted & mask);
+	// Gets the Euclidean pattern with the supplied parameters, masked and with
+	// each nibble flipped for simd::ifelse (which expects the opposite order)
+	inline uint64_t getPattern(uint64_t mask, uint8_t length, uint8_t density, uint8_t shift) {
+		return Loom::flipNibbleEndian(mask & this->patternGenerator.getShiftedPattern(length, density, shift));
 	}
 
 	void populateHarmonicSplitMasks() {
@@ -378,10 +315,10 @@ struct Loom : Module {
 			fader *= lengthFade;
 
 			// Do blending
-			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftLow);
-			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftHigh);
-			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftLow);
-			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftHigh);
+			auto lowDensLowShift = this->getPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -424,10 +361,10 @@ struct Loom : Module {
 			fader *= (1.f - lengthFade);
 
 			// Do blending
-			auto lowDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftLow);
-			auto lowDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityLow, iShiftHigh);
-			auto highDensLowShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftLow);
-			auto highDensHighShift = this->getShiftedPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftHigh);
+			auto lowDensLowShift = this->getPattern(harmonicMask, iLengthLow, iDensityLow, iShiftLow);
+			auto lowDensHighShift = this->getPattern(harmonicMask, iLengthLow, iDensityLow, iShiftHigh);
+			auto highDensLowShift = this->getPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftLow);
+			auto highDensHighShift = this->getPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftHigh);
 			auto shiftAmt = Loom::AMP_SHIFT;
 			for (int i = 0; i < numBlocks; i++) {
 				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
@@ -728,7 +665,7 @@ struct Loom : Module {
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
 		float drive = clamp(params[DRIVE_KNOB_PARAM].getValue() + driveCv, 0.f, 2.f);
-		mainOutsPacked = this->distortion.process(mainOutsPacked * 0.5f * drive);
+		mainOutsPacked = this->driveProcessor.process(mainOutsPacked * 0.5f * drive);
 
 		// BLEP
 		if (doSync) {
