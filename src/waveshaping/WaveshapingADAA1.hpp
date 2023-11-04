@@ -14,16 +14,16 @@ struct WaveshapingADAA1 {
     T lastAntiderivative;
 
     WaveshapingADAA1(T lastInputInit = T(0)): lastInput(lastInputInit) {
-        this->lastAntiderivative = S::antiderivative(lastInputInit);
+        this->lastAntiderivative = S::transformAD1(lastInputInit);
     }
 
     T process(T input) {
         T diff = input - this->lastInput;
         T fallback = simd::abs(diff) < T(DIFF_LIMIT);
-        T currAntiderivative = S::antiderivative(input);
+        T currAntiderivative = S::transformAD1(input);
         T ret = simd::ifelse(
             fallback,
-            T(0.5) * (input + this->lastInput),
+            S::transform(T(0.5) * (input + this->lastInput)),
             (currAntiderivative - this->lastAntiderivative) * simd::rcp(diff)
         );
         
@@ -50,7 +50,15 @@ struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T
      *      (x^3)/3 + 2x^2 + 2.5x + 4/3  , x < 0
      *     -(x^3)/3 + 2x^2 - 2.5x + 4/3  , x >= 0
      */
-    static T antiderivative(T input) {
+    static T transform(T input) {
+		T abs = simd::abs(input);
+		T sign = simd::sgn(input);
+		T absShifted = abs - 2.f;
+        T out = simd::ifelse(abs >= T(2), T(1.5) * sign, input);
+        return simd::ifelse(abs <= T(1), out, sign * (T(1.5) - T(0.5) * absShifted * absShifted));
+    }
+
+    static T transformAD1(T input) {
         T abs = simd::abs(input);
 		T sign = simd::sgn(input);
         T input2 = input * input;
