@@ -1,6 +1,7 @@
 #include "plugin.hpp"
 #include "waveshaping/WaveshapingADAA1.hpp"
 #include "sequencer/EuclideanPatternGenerator.hpp"
+#include "math/Utility.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -8,33 +9,6 @@
 #include <utility>
 
 using simd::float_4;
-
-// https://web.archive.org/web/20200628195036/http://mooooo.ooo/chebyshev-sine-approximation/
-// Thanks to Colin Wallace for doing some great math
-const float_4 CHEBYSHEV_COEFFS[6] = {
-	float_4(-3.1415926444234477f),   // x
-	float_4(2.0261194642649887f),    // x^3
-	float_4(-0.5240361513980939f),   // x^5
-	float_4(0.0751872634325299f),    // x^7
-	float_4(-0.006860187425683514f), // x^9
-	float_4(0.000385937753182769f),  // x^11
-};
-
-float_4 sin2pi_chebyshev(float_4 x) {
-	x = (-x * 2.f) + 1.f;
-	auto x2 = x * x;
-    auto p11 = CHEBYSHEV_COEFFS[5];
-    auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
-    auto p7 = p9 * x2  + CHEBYSHEV_COEFFS[3];
-    auto p5 = p7 * x2  + CHEBYSHEV_COEFFS[2];
-    auto p3 = p5 * x2  + CHEBYSHEV_COEFFS[1];
-    auto p1 = p3 * x2  + CHEBYSHEV_COEFFS[0];
-    return (x - 1.f) * (x + 1.f) * p1 * x;
-}
-
-inline float sum_float4(float_4 x) {
-	return x[0] + x[1] + x[2] + x[3];
-}
 
 struct Loom : Module {
 	enum ParamId {
@@ -276,6 +250,59 @@ struct Loom : Module {
 		}
 	}
 
+	inline void setAmplitudesHalf(
+		std::array<float_4, 16> &amplitudes,
+		int length,
+		float lengthFade,
+		float density,
+		float shift,
+		uint64_t harmonicMask,
+		int numBlocks
+	) {
+		int lengthIdx = length - 1;
+
+		// Density patterns and fade amount
+		float fDensity = density * lengthIdx;
+		int iDensityLow = (int)std::floor(fDensity);
+		int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
+		float densityFade = fDensity - iDensityLow;
+
+		// Shift values and fade amount
+		float fShift = shift * lengthIdx;
+		int iShiftLow = (int)std::floor(fShift);
+		int iShiftHigh = iShiftLow + 1;
+		float shiftFade = fShift - iShiftLow;
+
+		float_4 fader = {
+			(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
+			(1.f - densityFade) * shiftFade, // low density, high shift
+			densityFade * (1.f - shiftFade), // high density, low shift
+			densityFade * shiftFade // high density, high shift
+		};
+		fader *= lengthFade;
+
+		// Do blending
+		auto lowDensLowShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftLow);
+		auto lowDensHighShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftHigh);
+		auto highDensLowShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftLow);
+		auto highDensHighShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftHigh);
+		auto shiftAmt = Loom::AMP_SHIFT;
+		for (int i = 0; i < numBlocks; i++) {
+			auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+			auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & Loom::AMP_MASK);
+			auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
+			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
+
+			// Wish I could do a matrix multiplication here
+			amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
+			amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
+			amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
+			amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
+
+			shiftAmt -= 4;
+		}
+	}
+
 	std::pair<int, uint64_t> setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		int harmonicLimit,
@@ -290,98 +317,8 @@ struct Loom : Module {
 		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
 		float lengthFade = length - iLengthLow;
 
-		// Do high length first since it needs to do the extra work of zeroing out the amplitudes
-		{
-			int lengthIdx = iLengthHigh - 1;
-
-			// Density patterns and fade amount
-			float fDensity = density * lengthIdx;
-			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
-			float densityFade = fDensity - iDensityLow;
-
-			// Shift values and fade amount
-			float fShift = shift * lengthIdx;
-			int iShiftLow = (int)std::floor(fShift);
-			int iShiftHigh = iShiftLow + 1;
-			float shiftFade = fShift - iShiftLow;
-
-			float_4 fader = {
-				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
-				(1.f - densityFade) * shiftFade, // low density, high shift
-				densityFade * (1.f - shiftFade), // high density, low shift
-				densityFade * shiftFade // high density, high shift
-			};
-			fader *= lengthFade;
-
-			// Do blending
-			auto lowDensLowShift = this->getPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftLow);
-			auto lowDensHighShift = this->getPattern(harmonicMask, iLengthHigh, iDensityLow, iShiftHigh);
-			auto highDensLowShift = this->getPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftLow);
-			auto highDensHighShift = this->getPattern(harmonicMask, iLengthHigh, iDensityHigh, iShiftHigh);
-			auto shiftAmt = Loom::AMP_SHIFT;
-			for (int i = 0; i < numBlocks; i++) {
-				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
-				auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & Loom::AMP_MASK);
-				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
-				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
-
-				// Wish I could do a matrix multiplication here
-				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
-				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
-				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
-				amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
-
-				shiftAmt -= 4;
-			}
-		}
-
-		// Do low length
-		{
-			int lengthIdx = iLengthLow - 1;
-
-			// Density patterns and fade amount
-			float fDensity = density * lengthIdx;
-			int iDensityLow = (int)std::floor(fDensity);
-			int iDensityHigh = std::min(iDensityLow + 1, lengthIdx);
-			float densityFade = fDensity - iDensityLow;
-
-			// Shift values and fade amount
-			float fShift = shift * lengthIdx;
-			int iShiftLow = (int)std::floor(fShift);
-			int iShiftHigh = iShiftLow + 1;
-			float shiftFade = fShift - iShiftLow;
-
-			float_4 fader = {
-				(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
-				(1.f - densityFade) * shiftFade, // low density, high shift
-				densityFade * (1.f - shiftFade), // high density, low shift
-				densityFade * shiftFade // high density, high shift
-			};
-			fader *= (1.f - lengthFade);
-
-			// Do blending
-			auto lowDensLowShift = this->getPattern(harmonicMask, iLengthLow, iDensityLow, iShiftLow);
-			auto lowDensHighShift = this->getPattern(harmonicMask, iLengthLow, iDensityLow, iShiftHigh);
-			auto highDensLowShift = this->getPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftLow);
-			auto highDensHighShift = this->getPattern(harmonicMask, iLengthLow, iDensityHigh, iShiftHigh);
-			auto shiftAmt = Loom::AMP_SHIFT;
-			for (int i = 0; i < numBlocks; i++) {
-				auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & Loom::AMP_MASK);
-				auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & Loom::AMP_MASK);
-				auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & Loom::AMP_MASK);
-				auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & Loom::AMP_MASK);
-
-				// Wish I could do a matrix multiplication here
-				amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
-				amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
-				amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
-				amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
-
-				shiftAmt -= 4;
-			}
-		}
-
+		this->setAmplitudesHalf(amplitudes, iLengthHigh, lengthFade, density, shift, harmonicMask, numBlocks);
+		this->setAmplitudesHalf(amplitudes, iLengthLow, (1.f - lengthFade), density, shift, harmonicMask, numBlocks);
 		return {numBlocks, harmonicMask};
 	}
 
