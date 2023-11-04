@@ -14,15 +14,13 @@ inline uint64_t concatenateBitmasks(uint64_t a, uint64_t b) {
     return (a << numRelevantBits(b)) | b;
 }
 
-template<uint8_t MAX_LENGTH>
-inline uint64_t EuclideanPatternGenerator<MAX_LENGTH>::getShiftedPattern(uint8_t length, uint8_t density, uint8_t shift) {
+uint64_t EuclideanPatternGenerator::getShiftedPattern(uint8_t length, uint8_t density, uint8_t shift) {
     auto pattern = this->patternTable[length - 1][density];
     return((pattern >> shift) & this->lengthMasks[length - 1]) | (pattern << (length - shift));
 }
 
 // Implementation based on https://medium.com/code-music-noise/euclidean-rhythms-391d879494df
-template<uint8_t MAX_LENGTH>
-uint64_t EuclideanPatternGenerator<MAX_LENGTH>::calculateEuclideanBitmask(uint8_t length, uint8_t density) {
+uint64_t EuclideanPatternGenerator::calculateEuclideanBitmask(uint8_t length, uint8_t density) {
     if (length == density) return 0xffffffffffffffff << (64 - length);
 
     std::vector<uint64_t> ons(density, 1);

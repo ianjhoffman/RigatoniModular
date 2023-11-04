@@ -2,16 +2,15 @@
 
 #include <utility>
 
-template<uint8_t MAX_LENGTH>
 struct EuclideanPatternGenerator {
     // All Euclidean pattern bitmasks for each length up to 64; inner index is density
-	std::array<std::array<uint64_t, MAX_LENGTH>, MAX_LENGTH> patternTable;
+	std::array<std::array<uint64_t, 64>, 64> patternTable;
 
     // Masks for shifting sequences of each length
-	std::array<uint64_t, MAX_LENGTH> lengthMasks;
+	std::array<uint64_t, 64> lengthMasks;
 
     EuclideanPatternGenerator() {
-        for (int length = 1; length <= MAX_LENGTH; length++) {
+        for (int length = 1; length <= 64; length++) {
 			for (int density = 1; density <= length; density++) {
 				this->patternTable[length - 1][density - 1] = calculateEuclideanBitmask(length, density);
 			}

@@ -223,7 +223,7 @@ struct Loom : Module {
 	QuadraticDistortionADAA1<float_4> driveProcessor{};
 
 	// Euclidean pattern generator/storage
-	EuclideanPatternGenerator<64> patternGenerator;
+	EuclideanPatternGenerator patternGenerator{};
 
 	// Masks for which harmonics go to which output, based on output mode
 	std::array<std::array<float_4, 16>, 3> harmonicSplitMasks;
