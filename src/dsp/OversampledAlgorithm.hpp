@@ -30,9 +30,9 @@ struct ParameterInterpolator {
         for (int i = 0; i < NUM_PARAMS; i++) {
             switch (this->interpolationType) {
                 case ParameterInterpolationType::LINEAR:
-                    auto prev = &paramBuffer[prevOffset + i];
-                    auto curr = &paramBuffer[currOffset + i];
-                    dest[i] = prev + (curr - prev) * fade;
+                    auto prev = paramBuffer[prevOffset + i];
+                    auto curr = paramBuffer[currOffset + i];
+                    dest[i] = prev + (curr - prev) * T(fade);
             }
         }
     }
@@ -48,14 +48,21 @@ struct OversampledAlgorithm {
         step = 1.f / (float)OVERSAMPLE;
     }
 
-    std::array<TOut, NUM_OUTS> process(std::array<TParams, NUM_PARAMS> &params) {
+    std::array<TOut, NUM_OUTS> process(const Module::ProcessArgs& args, std::array<TParams, NUM_PARAMS> &params) {
+        // Modify args to account for oversampled sample rate
+        Module::ProcessArgs processArgs = {
+            .sampleRate = args.sampleRate * OVERSAMPLE,
+            .sampleTime = args.sampleTime * this->step,
+            .frame = args.frame
+        };
+
         this->paramInterp.update(params);
         float progress = this->step;
         TOut decimatorInputs[NUM_OUTS][OVERSAMPLE];
         std::array<TParams, NUM_PARAMS> stepParams;
         for (int i = 0; i < OVERSAMPLE; i++) {
-            this->paramInterp.interpolate(&stepParams, progress);
-            auto frameOuts = this->processFrame(&stepParams);
+            this->paramInterp.interpolate(stepParams, progress);
+            auto frameOuts = this->processFrame(processArgs, stepParams);
             for (int j = 0; j < NUM_OUTS; j++) {
                 decimatorInputs[j][i] = frameOuts[j];
             }
@@ -65,11 +72,11 @@ struct OversampledAlgorithm {
 
         std::array<TOut, NUM_OUTS> out;
         for (int i = 0; i < NUM_OUTS; i++) {
-            out[i] = this->decimators[i].process(decimatorInputs + i);
+            out[i] = this->decimators[i].process(decimatorInputs[i]);
         }
 
         return out;
     }
 
-    virtual std::array<TOut, NUM_OUTS> processFrame(TParams &params) = 0;
+    virtual std::array<TOut, NUM_OUTS> processFrame(const Module::ProcessArgs& args, std::array<TParams, NUM_PARAMS> &params) = 0;
 };
