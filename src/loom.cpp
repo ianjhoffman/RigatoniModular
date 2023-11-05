@@ -277,7 +277,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		// all of which can introduce extra harmonics). N = ((sample_rate / 2*freq) - 1) / stride
 		// Work off of the sample rate pre-oversampling by multiplying by step
 		auto freq2Recip = simd::rcp(2.f * std::abs(freq)); // TZFM can make frequency negative
-		float harmonicMultipleLimit = args.sampleRate * this->step * freq2Recip[0] - 1.f;
+		float harmonicMultipleLimit = args.sampleRate * this->getDivisor() * freq2Recip[0] - 1.f;
 		float clampedStride = std::fmax(stride, 0.1f);
 		int harmonicLimit = harmonicMultipleLimit / clampedStride;
 
@@ -315,7 +315,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
-		float scale = phaseInc * clampedStride;
+		float scale = phaseInc * clampedStride * this->getMultiplier();
 		float scaledLimit = harmonicMultipleLimit * scale;
 		float_4 scaledHarmonicLowerBound = scaledLimit * .75f;
 		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale);
@@ -369,7 +369,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
 				// Harmonic falloff between ~.75x and ~1x Nyquist
 				overallAmplitude *= simd::clamp(
-					1.f + (basePhaseInc - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
+					1.f + (basePhaseInc * this->getMultiplier() - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
 				);
 				
 				// Phase modulation
@@ -646,8 +646,29 @@ struct Loom : Module {
 
 	LoomAlgorithm algo{};
 	dsp::ClockDivider lightDivider;
+	bool oversample{false};
+
+	void onReset() override {
+		this->oversample = false;
+	}
+
+	json_t* dataToJson() override {
+		json_t* rootJ = json_object();
+		json_object_set_new(rootJ, "oversample", json_boolean(this->oversample));
+		return rootJ;
+	}
+
+	void dataFromJson(json_t* rootJ) override {
+		json_t* oversampleJ = json_object_get(rootJ, "oversample");
+		if (oversampleJ) {
+			this->oversample = json_boolean_value(oversampleJ);
+		}
+	}
 
 	void process(const ProcessArgs& args) override {
+		// Propagate right-click options to algorithm
+		this->algo.oversamplingEnabled = this->oversample;
+
 		// Read and set discrete parameters that aren't interpolated
 		algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
 			(int)params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue()
@@ -698,6 +719,7 @@ struct Loom : Module {
 		algoInputs[2] = {pivotHarm, intensity, drive, 0}; // Shaping section
 		algoInputs[3] = {syncValue, pingValue, sinPhaseOffset, 0}; // Misc CV
 
+		// Do stuff
 		auto outsPacked = this->algo.process(args, algoInputs)[0];
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
@@ -796,6 +818,35 @@ struct LoomWidget : ModuleWidget {
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 73.4)), module, Loom::S_LED_6_LIGHT));
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 73.4)), module, Loom::S_LED_7_LIGHT));
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 73.4)), module, Loom::S_LED_8_LIGHT));
+	}
+
+	void appendContextMenu(Menu* menu) override {
+		Loom* module = dynamic_cast<Loom*>(this->module);
+
+		menu->addChild(new MenuEntry);
+		menu->addChild(createMenuLabel("Oversampling"));
+
+		struct OversampleItem : MenuItem {
+			Loom* module;
+			bool oversample;
+			void onAction(const event::Action& e) override {
+				module->oversample = oversample;
+			}
+		};
+
+		{
+			OversampleItem* offItem = createMenuItem<OversampleItem>("Off");
+			offItem->rightText = CHECKMARK(!(module->oversample));
+			offItem->module = module;
+			offItem->oversample = false;
+			menu->addChild(offItem);
+
+			OversampleItem* onItem = createMenuItem<OversampleItem>("2x");
+			onItem->rightText = CHECKMARK(module->oversample);
+			onItem->module = module;
+			onItem->oversample = true;
+			menu->addChild(onItem);
+		}
 	}
 };
 

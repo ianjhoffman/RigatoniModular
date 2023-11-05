@@ -43,12 +43,23 @@ struct OversampledAlgorithm {
     ParameterInterpolator<NUM_PARAMS, TParams> paramInterp;
     dsp::Decimator<OVERSAMPLE, QUALITY, TOut> decimators[NUM_OUTS];
     float step;
+    bool oversamplingEnabled{true};
 
     OversampledAlgorithm(ParameterInterpolator<NUM_PARAMS, TParams> interp): paramInterp(interp) {
         step = 1.f / (float)OVERSAMPLE;
     }
 
+    int getMultiplier() {
+        return oversamplingEnabled ? OVERSAMPLE : 1;
+    }
+
+    float getDivisor() {
+        return oversamplingEnabled ? this->step : 1.f;
+    }
+
     std::array<TOut, NUM_OUTS> process(const Module::ProcessArgs& args, std::array<TParams, NUM_PARAMS> &params) {
+        if (!oversamplingEnabled) return this->processFrame(args, params);
+
         // Modify args to account for oversampled sample rate
         Module::ProcessArgs processArgs = {
             .sampleRate = args.sampleRate * OVERSAMPLE,
