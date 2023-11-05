@@ -127,6 +127,10 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 	bool strideLight;
 	float ampLights[8];
 
+	// Additional configurable parameters for anti-aliasing
+	bool doADAA{true};
+	bool doBlep{true};
+
 	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4>(ParameterInterpolator<4, float_4>()) {
 		// Set up everything pre-cached/pre-allocated
 		this->populateHarmonicSplitMasks();
@@ -460,7 +464,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		this->oscLight = fundPhaseWithSync > 0.5f;
 
 		// Do drive before BLEP, driving BLEP might introduce more aliasing
-		mainOutsPacked = this->driveProcessor.process(mainOutsPacked * 0.5f * drive);
+		mainOutsPacked *= 0.5f * drive;
+		mainOutsPacked = this->doADAA ? this->driveProcessor.process(mainOutsPacked) : this->driveProcessor.transform(mainOutsPacked);
 
 		// BLEP
 		if (doSync) {
@@ -473,8 +478,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 			this->blep.insertDiscontinuity(minBlepP, discontinuities);
 		}
 
-		float_4 outsPacked  = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
-		outsPacked = 5.f * (outsPacked + this->blep.process());
+		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
+		auto blepVal = this->blep.process();
+		outsPacked = 5.f * (outsPacked + (this->doBlep ? blepVal : 0.f));
 		return std::array<float_4, 1>{outsPacked};
 	}
 };
@@ -647,14 +653,20 @@ struct Loom : Module {
 	LoomAlgorithm algo{};
 	dsp::ClockDivider lightDivider;
 	bool oversample{false};
+	bool doADAA{true};
+	bool doBlep{true};
 
 	void onReset() override {
 		this->oversample = false;
+		this->doADAA = true;
+		this->doBlep = true;
 	}
 
 	json_t* dataToJson() override {
 		json_t* rootJ = json_object();
 		json_object_set_new(rootJ, "oversample", json_boolean(this->oversample));
+		json_object_set_new(rootJ, "doADAA", json_boolean(this->doADAA));
+		json_object_set_new(rootJ, "doBlep", json_boolean(this->doBlep));
 		return rootJ;
 	}
 
@@ -663,11 +675,23 @@ struct Loom : Module {
 		if (oversampleJ) {
 			this->oversample = json_boolean_value(oversampleJ);
 		}
+
+		json_t* doADAAJ = json_object_get(rootJ, "doADAA");
+		if (doADAAJ) {
+			this->doADAA = json_boolean_value(doADAAJ);
+		}
+
+		json_t* doBlepJ = json_object_get(rootJ, "doBlep");
+		if (doBlepJ) {
+			this->doBlep = json_boolean_value(doBlepJ);
+		}
 	}
 
 	void process(const ProcessArgs& args) override {
 		// Propagate right-click options to algorithm
 		this->algo.oversamplingEnabled = this->oversample;
+		this->algo.doADAA = this->doADAA;
+		this->algo.doBlep = this->doBlep;
 
 		// Read and set discrete parameters that aren't interpolated
 		algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
@@ -845,6 +869,56 @@ struct LoomWidget : ModuleWidget {
 			onItem->rightText = CHECKMARK(module->oversample);
 			onItem->module = module;
 			onItem->oversample = true;
+			menu->addChild(onItem);
+		}
+
+		menu->addChild(new MenuEntry);
+		menu->addChild(createMenuLabel("Drive ADAA"));
+
+		struct ADAAItem : MenuItem {
+			Loom* module;
+			bool doADAA;
+			void onAction(const event::Action& e) override {
+				module->doADAA = doADAA;
+			}
+		};
+
+		{
+			ADAAItem* offItem = createMenuItem<ADAAItem>("Off");
+			offItem->rightText = CHECKMARK(!(module->doADAA));
+			offItem->module = module;
+			offItem->doADAA = false;
+			menu->addChild(offItem);
+
+			ADAAItem* onItem = createMenuItem<ADAAItem>("On");
+			onItem->rightText = CHECKMARK(module->doADAA);
+			onItem->module = module;
+			onItem->doADAA = true;
+			menu->addChild(onItem);
+		}
+
+		menu->addChild(new MenuEntry);
+		menu->addChild(createMenuLabel("MinBLEP Anti-Aliasing"));
+
+		struct BlepItem : MenuItem {
+			Loom* module;
+			bool doBlep;
+			void onAction(const event::Action& e) override {
+				module->doBlep = doBlep;
+			}
+		};
+
+		{
+			BlepItem* offItem = createMenuItem<BlepItem>("Off");
+			offItem->rightText = CHECKMARK(!(module->doBlep));
+			offItem->module = module;
+			offItem->doBlep = false;
+			menu->addChild(offItem);
+
+			BlepItem* onItem = createMenuItem<BlepItem>("On");
+			onItem->rightText = CHECKMARK(module->doBlep);
+			onItem->module = module;
+			onItem->doBlep = true;
 			menu->addChild(onItem);
 		}
 	}
