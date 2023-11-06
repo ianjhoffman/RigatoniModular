@@ -23,7 +23,6 @@ const float LFO_MULTIPLIER = .05f;
 const float VCO_MULTIPLIER = 20.f;
 const float LIN_FM_FACTOR = 5.f;
 const float MAX_FREQ = 10240.f;
-const float SLOPE_SCALE = 0.01f;
 
 // Swap order of every 4-bit chunk
 inline static uint64_t flipNibbleEndian(uint64_t a) {
@@ -42,12 +41,6 @@ float scaleStride(float knobValue) {
 	return clamp(dsp::exp2_taylor5(knobValue) * 1.333333333333f - 1.333333333333f, 0.f, 4.f);
 }
 
-inline std::pair<float, float> calculatePivotSlopes(int tilt) {
-	return (tilt == 0) ? std::make_pair(0.1f, -2.f)
-		: ((tilt == 1) ? std::make_pair(-3.f, -3.f)
-		: std::make_pair(-2.f, 0.1f));
-}
-
 void shapeAmplitudes(
 	std::array<float_4, 16> &amplitudes,
 	uint64_t harmonicMask,
@@ -57,31 +50,39 @@ void shapeAmplitudes(
 	float pivotHarm,
 	float intensity
 ) {
-	auto slopes = calculatePivotSlopes(tilt);
-	float slopeMultiplier = (intensity < .5f) ? (intensity * 8.f) : (16.f * intensity - 4.f);
-	float belowSlope = slopes.first * SLOPE_SCALE * slopeMultiplier;
-	float aboveSlope = slopes.second * SLOPE_SCALE * slopeMultiplier;
-	float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(intensity * 2.f));
-	float_4 indices = {0.f, 1.f, 2.f, 3.f};
+	constexpr float SLOPE_SCALE = 0.01f;
+	constexpr float SLOPES[3][2] = {
+		{0.1f * SLOPE_SCALE, -2.f * SLOPE_SCALE},
+		{-3.f * SLOPE_SCALE, 3.f * SLOPE_SCALE},
+		{-2.f * SLOPE_SCALE, 0.1f * SLOPE_SCALE},
+	};
+
+	float doubleIntensity = intensity * 2.f;
+	float slopeMultiplier = (doubleIntensity < 1.f) ? (doubleIntensity * 4.f) : (8.f * doubleIntensity - 4.f);
+	float belowSlope = SLOPES[tilt][0] * slopeMultiplier;
+	float aboveSlope = SLOPES[tilt][1] * slopeMultiplier;
+	float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(doubleIntensity));
+	float_4 pivotDiffs = pivotHarm - float_4(0.f, 1.f, 2.f, 3.f);
 	auto shiftAmt = AMP_SHIFT;
 	harmonicMask = flipNibbleEndian(harmonicMask);
 	for (int i = 0; i < numBlocks; i++) {
-		float_4 diffs = pivotHarm - indices;
-		float_4 slopes = simd::ifelse(diffs > 0, belowSlope, aboveSlope);
+		float_4 slopes = simd::ifelse(pivotDiffs > 0, belowSlope, aboveSlope);
 		auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & AMP_MASK);
-		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(diffs), 0.f);
+		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(pivotDiffs), 0.f);
 		amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 
-		indices += 4.f;
+		pivotDiffs -= 4.f;
 		shiftAmt -= 4;
 	}
 }
 
 float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
+	constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f;
+
 	coarse += expFm ? fmCv : 0.f;
 	float multiplier = lfoMode ? LFO_MULTIPLIER : VCO_MULTIPLIER;
-	float fineTuneMultiplier = dsp::exp2_taylor5(fine * (lfoMode ? 1.f : (7.f / 12.f)));
-	float freq = multiplier * fineTuneMultiplier * dsp::exp2_taylor5(coarse + pitchCv);
+	fine *= lfoMode ? 1.f : VCO_FINE_TUNE_OCTAVES;
+	float freq = multiplier * dsp::exp2_taylor5(coarse + pitchCv + fine);
 	freq += expFm ? 0.f : fmCv * multiplier * LIN_FM_FACTOR;
 
 	// Clamp to max frequency, allow negative frequency for thru-zero linear FM
@@ -126,7 +127,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 	// Readable parameters for lights
 	bool oscLight;
 	bool strideLight;
-	float ampLights[8];
+	float_4 ampLights[8];
 
 	// Additional configurable parameters for anti-aliasing
 	bool doADAA{true};
@@ -296,7 +297,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		// Set summed amplitudes for light show
 		for (int i = 0; i < 8; i++) {
 			int off = i << 1;
-			this->ampLights[i] = sum_float4(harmonicAmplitudes[off] + harmonicAmplitudes[off + 1]) * .125f;
+			this->ampLights[i] = harmonicAmplitudes[off] + harmonicAmplitudes[off + 1];
 		}
 
 		// Shaping section
@@ -319,10 +320,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
-		float scale = phaseInc * clampedStride * this->getMultiplier();
-		float scaledLimit = harmonicMultipleLimit * scale;
-		float_4 scaledHarmonicLowerBound = scaledLimit * .75f;
-		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale);
+		float scale = phaseInc * clampedStride;
+		float_4 scaledHarmonicLowerBound = harmonicMultipleLimit * scale * .75f;
+		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale * this->getMultiplier());
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
@@ -346,10 +346,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
 		// for each output for both synced and unsynced sine and cosine
 		std::array<float_4, 16> out1PhaseWithoutSync;
-		int oddHarmSplitMaskIdx = this->splitMode ? 1 : 0;
-		int evenHarmSplitMaskIdx = this->splitMode ? 2 : 0;
+		std::array<float_4, 16> &oddHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 1 : 0];
+		std::array<float_4, 16> &evenHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 2 : 0];
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
-		float_4 ampMult = (float)this->splitMode + 1.f;
 
 		// Trying something new with progressive phase multiple calculations for precision (?)
 		float_4 phaseIncAdd = phaseInc * 4.f * stride;
@@ -370,31 +369,29 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
 
 			if (i < numBlocks) {
-				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i] * ampMult;
+				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i];
 				// Harmonic falloff between ~.75x and ~1x Nyquist
 				overallAmplitude *= simd::clamp(
-					1.f + (basePhaseInc * this->getMultiplier() - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
+					1.f + (basePhaseInc - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
 				);
 				
 				// Phase modulation
 				out1PhaseWithoutSync[i] += out1PmAdd;
 				out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
 
-				float_4 out2PhaseWithoutSync = phaseAccumVal + out2PmAdd;
-				out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
-
 				// Output 2 doesn't use cosine phase partials in odd/even split mode
-				out2PhaseWithoutSync = this->splitMode ? out1PhaseWithoutSync[i] : out2PhaseWithoutSync;
+				float_4 out2PhaseWithoutSync = this->splitMode ? out1PhaseWithoutSync[i] : phaseAccumVal + out2PmAdd;
+				out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
 
 				// Calculate sin/cos with amplitudes, sum with output
 				out1WithoutSyncSum += simd::ifelse(
-					this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+					oddHarmSplitMask[i],
 					sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
 					0.f
 				);
 
 				out2WithoutSyncSum += simd::ifelse(
-					this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+					evenHarmSplitMask[i],
 					sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
 					0.f
 				);
@@ -411,20 +408,18 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 					out1PhaseWithSync += out1PmAdd;
 					out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
 
-					float_4 out2PhaseWithSync = phaseAccumVal + out2PmAdd;
+					// Output 2 doesn't use cosine phase partials in odd/even split mode
+					float_4 out2PhaseWithSync = this->splitMode ? out1PhaseWithSync : phaseAccumVal + out2PmAdd;
 					out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
 
-					// Output 2 doesn't use cosine phase partials in odd/even split mode
-					out2PhaseWithSync = this->splitMode ? out1PhaseWithSync : out2PhaseWithSync;
-
 					out1WithSyncSum += simd::ifelse(
-						this->harmonicSplitMasks[oddHarmSplitMaskIdx][i],
+						oddHarmSplitMask[i],
 						sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
 						0.f
 					);
 
 					out2WithSyncSum += simd::ifelse(
-						this->harmonicSplitMasks[evenHarmSplitMaskIdx][i],
+						evenHarmSplitMask[i],
 						sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
 						0.f
 					);
@@ -451,12 +446,13 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		mainOutsPacked += {out1WithoutSyncSum[1], out1WithSyncSum[1], out2WithoutSyncSum[1], out2WithSyncSum[1]};
 		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
 		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
+		mainOutsPacked *= (float)this->splitMode + 1.f;
 
 		// Fundamental and square outs are a lot easier
 		auto fundPhaseWithoutSync = out1PhaseWithoutSync[0][0];
 		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
-		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
-		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
+		float fundOutWithoutSync = sin2pi_chebyshev<float>(fundPhaseWithoutSync);
+		float fundOutWithSync = sin2pi_chebyshev<float>(fundPhaseWithSync);
 		float squareOutWithSync = (fundPhaseWithSync < 0.5f) ? 1.f : -1.f;
 
 		// Oscillator light indicator based on fundamental phase accumulator
@@ -785,7 +781,8 @@ struct Loom : Module {
 			lights[STRIDE_1_LIGHT].setSmoothBrightness((float)(this->algo.strideLight), lightTime);
 			
 			for (int i = 0; i < 8; i++) {
-				lights[S_LED_1_LIGHT + i].setSmoothBrightness(this->algo.ampLights[i], lightTime);
+				float brightness = sum_float4(this->algo.ampLights[i]) * .125f;
+				lights[S_LED_1_LIGHT + i].setSmoothBrightness(brightness, lightTime);
 			}
 		}
 	}
