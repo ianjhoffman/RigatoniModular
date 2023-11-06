@@ -52,9 +52,9 @@ void shapeAmplitudes(
 ) {
 	constexpr float SLOPE_SCALE = 0.01f;
 	constexpr float SLOPES[3][2] = {
-		{0.1f * SLOPE_SCALE, -2.f * SLOPE_SCALE},
-		{-3.f * SLOPE_SCALE, 3.f * SLOPE_SCALE},
-		{-2.f * SLOPE_SCALE, 0.1f * SLOPE_SCALE},
+		{              0.f, -2.f * SLOPE_SCALE},
+		{3.f * SLOPE_SCALE, 3.f * SLOPE_SCALE},
+		{2.f * SLOPE_SCALE, 0.f},
 	};
 
 	float doubleIntensity = intensity * 2.f;
@@ -68,7 +68,7 @@ void shapeAmplitudes(
 	for (int i = 0; i < numBlocks; i++) {
 		float_4 slopes = simd::ifelse(pivotDiffs > 0, belowSlope, aboveSlope);
 		auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & AMP_MASK);
-		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(pivotDiffs), 0.f);
+		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * pivotDiffs, 0.f);
 		amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 
 		pivotDiffs -= 4.f;

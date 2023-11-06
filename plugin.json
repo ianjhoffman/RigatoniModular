@@ -8,7 +8,7 @@
   "authorEmail": "ijh6@cornell.edu",
   "authorUrl": "https://github.com/ianjhoffman",
   "pluginUrl": "https://github.com/ianjhoffman/RigatoniModular",
-  "manualUrl": "",
+  "manualUrl": "https://github.com/ianjhoffman/RigatoniModular/tree/master/manuals",
   "sourceUrl": "",
   "donateUrl": "",
   "changelogUrl": "",
@@ -17,6 +17,7 @@
       "slug": "RigatoniModular-ThruZero",
       "name": "Thru Zero",
       "description": "A small waveshaping utility that mimics soft oscillator sync for input ramp waves and acts as a through zero FM helper",
+      "manualUrl": "https://github.com/ianjhoffman/RigatoniModular/blob/master/manuals/ThruZero.md",
       "tags": [
         "Distortion",
         "Utility",
@@ -28,10 +29,12 @@
       "slug": "RigatoniModular-Loom",
       "name": "Loom",
       "description": "An additive oscillator based loosely on the structure of Euclidean pattern sequencing",
+      "manualUrl": "https://github.com/ianjhoffman/RigatoniModular/blob/master/manuals/Loom.md",
       "tags": [
         "Digital",
         "Low-frequency oscillator",
-        "Oscillator"
+        "Oscillator",
+        "Synth voice"
       ],
       "keywords": "additive euclidean vco lfo"
     }
