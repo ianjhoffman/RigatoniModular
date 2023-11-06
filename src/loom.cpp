@@ -226,7 +226,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float stride,  // 0-4
 		float shift    // 0-1
 	) {
-		uint64_t harmonicMask = 0xffffffffffffffff << (64 - clamp(harmonicLimit, 1, 64));
+		uint64_t harmonicMask = 0xffffffffffffffff << (64 - harmonicLimit);
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
 		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
@@ -284,7 +284,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		auto freq2Recip = simd::rcp(2.f * std::abs(freq)); // TZFM can make frequency negative
 		float harmonicMultipleLimit = args.sampleRate * this->getDivisor() * freq2Recip[0] - 1.f;
 		float clampedStride = std::fmax(stride, 0.1f);
-		int harmonicLimit = harmonicMultipleLimit / clampedStride;
+		int harmonicLimit = clamp((int)(harmonicMultipleLimit / clampedStride), 1, 64);
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
