@@ -65,21 +65,21 @@ struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T
      * This quadratic distortion transform is implemented as:
      *
      *                               sgn(x)*1.5  , |x| >= 2
-     *                                        x  , |x| <= 1
-     *         sgn(x) * (1.5 + 0.5*(|x| - 2)^2)  , otherwise
+     *         sgn(x) * (1.5 + 0.5*(|x| - 2)^2)  , |x| >= 1
+     *                                        x  , otherwise
      *
      * and its first antiderivative is:
      * 
-     *                        1.5x*sgn(x) - 1/6  , |x| >= 2
-     *                                  (x^2)/2  , |x| <= 1
-     *     1/6 + x^2 - sgn(x) * ((x^3)/6 + x/2)  , otherwise
+     *                        1.5x*sgn(x) - 7/6  , |x| >= 2
+     *     1/6 + x^2 - sgn(x) * ((x^3)/6 + x/2)  , |x| >= 1
+     *                                  (x^2)/2  , otherwise
      */
     static T transform(T input) {
 		T abs = simd::abs(input);
 		T sign = simd::sgn(input);
 		T absShifted = abs - 2.f;
-        T out = simd::ifelse(abs >= T(2), T(1.5) * sign, input);
-        return simd::ifelse(abs <= T(1), out, sign * (T(1.5) - T(0.5) * absShifted * absShifted));
+        T shaped = simd::ifelse(abs >= T(2), T(1.5) * sign, sign * (T(1.5) - T(0.5) * absShifted * absShifted));
+        return simd::ifelse(abs >= T(1), shaped, input);
     }
 
     static T transformAD1(T input) {
@@ -87,11 +87,11 @@ struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T
 		T sign = simd::sgn(input);
         T input2 = input * input;
         T input3 = input2 * input;
-        T out = simd::ifelse(abs >= T(2), T(1.5) * sign * input - T(0.1666666666), input2 * T(0.5));
-        return simd::ifelse(
-            abs <= T(1),
-            out,
+        T shaped = simd::ifelse(
+            abs >= T(2),
+            T(1.5) * sign * input - T(1.1666666666),
             T(0.1666666666) + input2 - sign * (T(0.1666666666) * input3 + T(0.5) * input)
         );
+        return simd::ifelse(abs >= T(1), shaped, input2 * T(0.5));
     }
 };
