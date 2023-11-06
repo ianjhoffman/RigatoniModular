@@ -297,7 +297,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		// Set summed amplitudes for light show
 		for (int i = 0; i < 8; i++) {
 			int off = i << 1;
-			this->ampLights[i] = sum_float4(harmonicAmplitudes[off]) + sum_float4(harmonicAmplitudes[off + 1]);
+			this->ampLights[i] = sum_float4(harmonicAmplitudes[off] + harmonicAmplitudes[off + 1]) * .125f;
 		}
 
 		// Shaping section
@@ -779,8 +779,7 @@ struct Loom : Module {
 			lights[STRIDE_1_LIGHT].setSmoothBrightness((float)(this->algo.strideLight), lightTime);
 			
 			for (int i = 0; i < 8; i++) {
-				auto ledAmp = this->algo.ampLights[i] * .125f;
-				lights[S_LED_1_LIGHT + i].setSmoothBrightness(ledAmp, lightTime);
+				lights[S_LED_1_LIGHT + i].setSmoothBrightness(this->algo.ampLights[i], lightTime);
 			}
 		}
 	}
