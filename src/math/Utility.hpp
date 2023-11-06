@@ -19,8 +19,11 @@ T sin2pi_chebyshev(T x) {
 
 	x = (-x * 2.f) + 1.f;
 	auto x2 = x * x;
-    auto p11 = CHEBYSHEV_COEFFS[5];
-    auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
+
+	// Still pretty accurate without the x^11 term
+    //auto p11 = CHEBYSHEV_COEFFS[5];
+    //auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
+	auto p9 = CHEBYSHEV_COEFFS[4];
     auto p7 = p9 * x2  + CHEBYSHEV_COEFFS[3];
     auto p5 = p7 * x2  + CHEBYSHEV_COEFFS[2];
     auto p3 = p5 * x2  + CHEBYSHEV_COEFFS[1];
