@@ -111,7 +111,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float_4> blep;
+	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
+	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
 
 	// Discrete switched parameters that aren't interpolated
@@ -325,8 +326,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale);
 
 		// Calculate fundamental sync for non-free continuous stride
-		float fundAccum = this->phaseAccumulators[0][0];
-		float fundPhaseWrapped = fundAccum + phaseInc - 1.f;
+		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
+		float fundPhaseWrapped = fundAccumBeforeInc + phaseInc - 1.f;
 		bool fundSync = fundPhaseWrapped >= 0.f;
 
 		// 2 types of sync that can introduce discontinuities
@@ -457,8 +458,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
 		float fundOutWithoutSync = simd::sin(2.f * M_PI * fundPhaseWithoutSync);
 		float fundOutWithSync = simd::sin(2.f * M_PI * fundPhaseWithSync);
-		auto squareOutWithoutSync = simd::ifelse(fundPhaseWithoutSync < 0.5f, 1.f, -1.f);
-		auto squareOutWithSync = simd::ifelse(fundPhaseWithSync < 0.5f, 1.f, -1.f);
+		float squareOutWithSync = (fundPhaseWithSync < 0.5f) ? 1.f : -1.f;
 
 		// Oscillator light indicator based on fundamental phase accumulator
 		this->oscLight = fundPhaseWithSync > 0.5f;
@@ -473,14 +473,35 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 				mainOutsPacked[1] - mainOutsPacked[0],
 				mainOutsPacked[3] - mainOutsPacked[2],
 				fundOutWithSync - fundOutWithoutSync,
-				squareOutWithSync - squareOutWithoutSync
+				0.f,
 			};
-			this->blep.insertDiscontinuity(minBlepP, discontinuities);
+			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
 		}
 
 		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
-		auto blepVal = this->blep.process();
-		outsPacked = 5.f * (outsPacked + (this->doBlep ? blepVal : 0.f));
+
+		if (this->doBlep) {
+			float squareOutWithoutSync = (fundPhaseWithoutSync < 0.5f) ? 1.f : -1.f;
+			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
+			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
+
+			if (normalSync) {
+				// Hard sync step (could be up, could be nothing)
+				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
+			} else if (fundSync) {
+				// Square step up at 0% phase
+				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
+			} else if (squareStepDown) {
+				// Square step down at 50% phase
+				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
+			}
+
+			outsPacked[3] += this->squareBlep.process();
+		}
+
+		auto syncBlepVal = this->syncBlep.process();
+		outsPacked = 5.f * (outsPacked + (this->doBlep ? syncBlepVal : 0.f));
+
 		return std::array<float_4, 1>{outsPacked};
 	}
 };
