@@ -254,8 +254,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float drive = params[2][2];
 
 		float syncValue = params[3][0];
-		float pingValue = params[3][1];
-		float sinPhaseOffset = params[3][2];
+		float sinPhaseOffset = params[3][1];
 
 		// Perform any necessary modifications on unpacked parameters
 		length = scaleLength(clamp(length, -2.f, 2.f));
@@ -669,10 +668,14 @@ struct Loom : Module {
 		configOutput(FUNDAMENTAL_OUTPUT, "Fundamental (Sine)");
 		configOutput(ODD_ZERO_DEGREE_OUTPUT, "Odd / 0°");
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
+
+		lightDivider.setDivision(32);
+		pingEnvelope.setRiseFall(650.f, 25.f);
 	}
 
 	LoomAlgorithm algo{};
 	dsp::ClockDivider lightDivider;
+	dsp::ExponentialSlewLimiter pingEnvelope;
 	bool oversample{false};
 	bool doADAA{true};
 	bool doBlep{true};
@@ -725,21 +728,25 @@ struct Loom : Module {
 		algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
 		algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 
+		// Get ping envelope so we have it for normalling to unpatched CV inputs
+		float pingValue = clamp(inputs[PING_INPUT].getVoltage(), 0.f, 8.f);
+		float env = this->pingEnvelope.process(args.sampleTime, pingValue);
+
 		// Read parameters that we'll pack for interpolation, avoiding non-linear calculations
 		// such as exponential length or stride scaling
 		float length = params[HARM_COUNT_KNOB_PARAM].getValue();
-		length += 0.4f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getVoltage();
+		length += 0.4f * params[HARM_COUNT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_COUNT_CV_INPUT].getNormalVoltage(env);
 
 		float density = params[HARM_DENSITY_KNOB_PARAM].getValue();
-		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getVoltage();
+		density += 0.2f * params[HARM_DENSITY_ATTENUVERTER_PARAM].getValue() * inputs[HARM_DENSITY_CV_INPUT].getNormalVoltage(env);
 
 		float shift = params[HARM_SHIFT_KNOB_PARAM].getValue();
-		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getVoltage();
+		shift += 0.2f * params[HARM_SHIFT_ATTENUVERTER_PARAM].getValue() * inputs[HARM_SHIFT_CV_INPUT].getNormalVoltage(env);
 
 		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
-		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getVoltage();
+		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getNormalVoltage(env);
 
-		float fmCv = params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getVoltage();
+		float fmCv = params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getNormalVoltage(env);
 		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
 		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
 		float pitchCv = inputs[PITCH_INPUT].getVoltage();
@@ -747,22 +754,21 @@ struct Loom : Module {
 		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue();
 		pivotHarm += 0.4f * inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage();
 
-		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
+		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getNormalVoltage(env);
 		float intensity = params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv;
 
-		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getVoltage();
+		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getNormalVoltage(env);
 		float drive = params[DRIVE_KNOB_PARAM].getValue() + driveCv;
 
 		float syncValue = inputs[SYNC_INPUT].getVoltage();
-		float pingValue = inputs[PING_INPUT].getVoltage();
-		float sinPhaseOffset = params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getVoltage();
+		float sinPhaseOffset = params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getNormalVoltage(env);
 
 		// Pack algorithm inputs
 		std::array<float_4, 4> algoInputs;
 		algoInputs[0] = {length, density, shift, stride}; // Structure section
 		algoInputs[1] = {fmCv, coarse, fine, pitchCv}; // Pitch influences
 		algoInputs[2] = {pivotHarm, intensity, drive, 0}; // Shaping section
-		algoInputs[3] = {syncValue, pingValue, sinPhaseOffset, 0}; // Misc CV
+		algoInputs[3] = {syncValue, sinPhaseOffset, 0, 0}; // Misc CV
 
 		// Do stuff
 		auto outsPacked = this->algo.process(args, algoInputs)[0];
