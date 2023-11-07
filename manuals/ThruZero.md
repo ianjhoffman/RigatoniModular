@@ -20,7 +20,7 @@ Patch an audio or CV signal into the CV input. The threshold knob acts as the ba
 
 ## Demo
 
-![image of the module in action](./img/ThruZero1.png)
+![image of the module in action](./img/thruzero/ThruZero1.png)
 
 ## Through Zero FM Emulation
 

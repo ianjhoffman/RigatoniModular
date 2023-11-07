@@ -90,14 +90,6 @@ float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, 
 }
 
 struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
-	static constexpr uint64_t AMP_MASK = 0x000000000000000f;
-	static constexpr int AMP_SHIFT = 60;
-	static constexpr float LFO_MULTIPLIER = .05f;
-	static constexpr float VCO_MULTIPLIER = 20.f;
-	static constexpr float LIN_FM_FACTOR = 5.f;
-	static constexpr float MAX_FREQ = 10240.f;
-	static constexpr float SLOPE_SCALE = 0.01f;
-
 	// Anti-aliased drive processor
 	QuadraticDistortionADAA1<float_4> driveProcessor{};
 
