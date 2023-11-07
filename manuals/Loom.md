@@ -69,17 +69,29 @@ While Euclidean patterns are specified by integer values, all 3 of the **Length*
 
 ## Pitch Control Section
 
-TODO
+<img src="./img/loom/LoomPitchControlSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
 
-## Spectral and Amplitude Shaping Section
-
-TODO
-
-## Output Configuration Section
+_Fig. 3: Loom's pitch control section._
 
 TODO
 
-## Sync and Ping
+## Spectral & Amplitude Shaping Section
+
+<img src="./img/loom/LoomSpectralAmplitudeShapingSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+
+_Fig. 4: Loom's spectral & amplitude shaping section._
+
+TODO
+
+## Outputs & Output Configuration Section
+
+<img src="./img/loom/LoomOutputSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+
+_Fig. 5: Loom's outputs & output configuration section._
+
+TODO
+
+## Sync & Ping
 
 TODO
 
