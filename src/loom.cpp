@@ -1,8 +1,9 @@
 #include "plugin.hpp"
-#include "waveshaping/WaveshapingADAA1.hpp"
 #include "sequencer/EuclideanPatternGenerator.hpp"
 #include "math/Utility.hpp"
 #include "dsp/OversampledAlgorithm.hpp"
+#include "dsp/PolyBlep.hpp"
+#include "dsp/WaveshapingADAA1.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -96,6 +97,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
 	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
+	PolyBlep<float_4> blep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
@@ -201,23 +203,24 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		}
 	}
 
-	std::pair<int, uint64_t> setAmplitudes(
+	void setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		int harmonicLimit,
 		float length,  // 1-64
 		float density, // 0-1
 		float stride,  // 0-4
-		float shift    // 0-1
+		float shift,   // 0-1
+		int *numBlocks,
+		uint64_t *harmonicMask
 	) {
-		uint64_t harmonicMask = 0xffffffffffffffff << (64 - harmonicLimit);
+		*harmonicMask = 0xffffffffffffffff << (64 - harmonicLimit);
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
-		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
+		*numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
 		float lengthFade = length - iLengthLow;
 
-		this->setAmplitudesHalf(amplitudes, iLengthHigh, lengthFade, density, shift, harmonicMask, numBlocks);
-		this->setAmplitudesHalf(amplitudes, iLengthLow, (1.f - lengthFade), density, shift, harmonicMask, numBlocks);
-		return {numBlocks, harmonicMask};
+		this->setAmplitudesHalf(amplitudes, iLengthHigh, lengthFade, density, shift, *harmonicMask, *numBlocks);
+		this->setAmplitudesHalf(amplitudes, iLengthLow, (1.f - lengthFade), density, shift, *harmonicMask, *numBlocks);
 	}
 
 	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 3> &params) override {
@@ -265,11 +268,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		auto setAmplitudesRet = this->setAmplitudes(
-			harmonicAmplitudes, harmonicLimit, length, density, stride, shift
-		);
-		int numBlocks = setAmplitudesRet.first;
-		uint64_t harmonicMask = setAmplitudesRet.second;
+		int numBlocks;
+		uint64_t harmonicMask;
+		this->setAmplitudes(harmonicAmplitudes, harmonicLimit, length, density, stride, shift, &numBlocks, &harmonicMask);
 
 		// Set summed amplitudes for light show
 		for (int i = 0; i < 8; i++) {
