@@ -23,6 +23,7 @@ const float LFO_MULTIPLIER = .05f;
 const float VCO_MULTIPLIER = 20.f;
 const float LIN_FM_FACTOR = 5.f;
 const float MAX_FREQ = 10240.f;
+constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f; // a fifth
 
 // Swap order of every 4-bit chunk
 inline static uint64_t flipNibbleEndian(uint64_t a) {
@@ -76,20 +77,12 @@ void shapeAmplitudes(
 	}
 }
 
-float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
-	constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f;
-
-	coarse += expFm ? fmCv : 0.f;
-	float multiplier = lfoMode ? LFO_MULTIPLIER : VCO_MULTIPLIER;
-	fine *= lfoMode ? 1.f : VCO_FINE_TUNE_OCTAVES;
-	float freq = multiplier * dsp::exp2_taylor5(coarse + pitchCv + fine);
-	freq += expFm ? 0.f : fmCv * multiplier * LIN_FM_FACTOR;
-
+inline float calculateFrequencyHz(float expCv, float linCv, float multiplier) {
 	// Clamp to max frequency, allow negative frequency for thru-zero linear FM
-	return std::min(freq, MAX_FREQ);
+	return std::min(multiplier * (dsp::exp2_taylor5(expCv) + linCv), MAX_FREQ);
 }
 
-struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
+struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	// Anti-aliased drive processor
 	QuadraticDistortionADAA1<float_4> driveProcessor{};
 
@@ -107,10 +100,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
+	float freqMultiplier{VCO_MULTIPLIER};
 
 	// Discrete switched parameters that aren't interpolated
-	bool lfoMode{false};
-	bool expFm{false};
 	bool splitMode{false};
 	bool boostFund{true};
 	int tilt{0};
@@ -125,7 +117,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 	bool doADAA{true};
 	bool doBlep{true};
 
-	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4>(ParameterInterpolator<4, float_4>()) {
+	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4>(ParameterInterpolator<3, float_4>()) {
 		// Set up everything pre-cached/pre-allocated
 		this->populateHarmonicSplitMasks();
 		this->calculateBaseAmplitudes();
@@ -230,24 +222,21 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		return {numBlocks, harmonicMask};
 	}
 
-	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 4> &params) override {
+	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 3> &params) override {
 		// Unpack params
 		float length = params[0][0];
 		float density = params[0][1];
 		float shift = params[0][2];
 		float stride = params[0][3];
 
-		float fmCv = params[1][0];
-		float coarse = params[1][1];
-		float fine = params[1][2];
-		float pitchCv = params[1][3];
+		float expCv = params[1][0];
+		float linCv = params[1][1];
+		float sinPhaseOffset = params[1][2];
+		float syncValue = params[1][3];
 
 		float pivotHarm = params[2][0];
 		float intensity = params[2][1];
 		float drive = params[2][2];
-
-		float syncValue = params[3][0];
-		float sinPhaseOffset = params[3][1];
 
 		// Perform any necessary modifications on unpacked parameters
 		length = scaleLength(clamp(length, -2.f, 2.f));
@@ -257,17 +246,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		if (this->continuousStrideMode == ContinuousStrideMode::OFF) stride = std::round(stride);
 		this->strideLight = std::abs(stride - 1.f) < .01f; // Reasonable epsilon
 
-		fmCv = clamp(fmCv, -5.f, 5.f);
+		sinPhaseOffset = clamp(sinPhaseOffset, -1.f, 1.f);
+		sinPhaseOffset -= std::floor(sinPhaseOffset);
 
 		pivotHarm = scaleLength(clamp(pivotHarm, -2.f, 2.f)) - 1.f;
 		intensity = clamp(intensity);
 		drive = clamp(drive, 0.f, 2.f);
 
-		sinPhaseOffset = clamp(sinPhaseOffset, -1.f, 1.f);
-		sinPhaseOffset -= std::floor(sinPhaseOffset);
-
 		// Calculate oscillator frequency based on a multitude of factors
-		float freq = calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
+		float freq = calculateFrequencyHz(expCv, linCv, this->freqMultiplier);
 
 		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns.
 		// This functions as simple built-in band-limiting (not perfect because of drive, fm, pm,
@@ -568,7 +555,7 @@ struct Loom : Module {
 		struct CoarseTuneQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				if (module->algo.lfoMode) {
+				if (module->lfoMode) {
 					// 0.003125Hz (320 second cycle) to 25.6Hz
 					displayMultiplier = LFO_MULTIPLIER;
 				} else {
@@ -582,7 +569,7 @@ struct Loom : Module {
 		struct FineTuneQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				if (module->algo.lfoMode) {
+				if (module->lfoMode) {
 					// .5x to 2x
 					unit = "x";
 					displayBase = 2.f;
@@ -669,54 +656,45 @@ struct Loom : Module {
 	LoomAlgorithm algo{};
 	dsp::ClockDivider lightDivider;
 	dsp::ExponentialSlewLimiter pingEnvelope;
-	bool oversample{false};
-	bool doADAA{true};
-	bool doBlep{true};
+	bool lfoMode{false};
 
 	void onReset() override {
-		this->oversample = false;
-		this->doADAA = true;
-		this->doBlep = true;
+		this->algo.oversamplingEnabled = false;
+		this->algo.doADAA = true;
+		this->algo.doBlep = true;
 	}
 
 	json_t* dataToJson() override {
 		json_t* rootJ = json_object();
-		json_object_set_new(rootJ, "oversample", json_boolean(this->oversample));
-		json_object_set_new(rootJ, "doADAA", json_boolean(this->doADAA));
-		json_object_set_new(rootJ, "doBlep", json_boolean(this->doBlep));
+		json_object_set_new(rootJ, "oversample", json_boolean(this->algo.oversamplingEnabled));
+		json_object_set_new(rootJ, "doADAA", json_boolean(this->algo.doADAA));
+		json_object_set_new(rootJ, "doBlep", json_boolean(this->algo.doBlep));
 		return rootJ;
 	}
 
 	void dataFromJson(json_t* rootJ) override {
 		json_t* oversampleJ = json_object_get(rootJ, "oversample");
 		if (oversampleJ) {
-			this->oversample = json_boolean_value(oversampleJ);
+			this->algo.oversamplingEnabled = json_boolean_value(oversampleJ);
 		}
 
 		json_t* doADAAJ = json_object_get(rootJ, "doADAA");
 		if (doADAAJ) {
-			this->doADAA = json_boolean_value(doADAAJ);
+			this->algo.doADAA = json_boolean_value(doADAAJ);
 		}
 
 		json_t* doBlepJ = json_object_get(rootJ, "doBlep");
 		if (doBlepJ) {
-			this->doBlep = json_boolean_value(doBlepJ);
+			this->algo.doBlep = json_boolean_value(doBlepJ);
 		}
 	}
 
 	void process(const ProcessArgs& args) override {
-		// Propagate right-click options to algorithm
-		this->algo.oversamplingEnabled = this->oversample;
-		this->algo.doADAA = this->doADAA;
-		this->algo.doBlep = this->doBlep;
-
 		// Read and set discrete parameters that aren't interpolated
 		algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
 			(int)params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue()
 		);
 
-		algo.lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
-		algo.expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
 		algo.boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
 		algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
 		algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
@@ -739,10 +717,18 @@ struct Loom : Module {
 		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
 		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getNormalVoltage(env);
 
-		float fmCv = params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getNormalVoltage(env);
+		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getNormalVoltage(env), -5.f, 5.f);
 		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
 		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
-		float pitchCv = inputs[PITCH_INPUT].getVoltage();
+		float pitchCv = clamp(inputs[PITCH_INPUT].getVoltage(), -2.f, 8.f);
+
+		// Collapse fmCv, coarse, fine, pitchCv into two values, expCv and linCv
+		this->lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		this->algo.freqMultiplier = this->lfoMode ? LFO_MULTIPLIER : VCO_MULTIPLIER;
+		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
+		fine *= lfoMode ? 1.f : VCO_FINE_TUNE_OCTAVES;
+		float expCv = coarse + fine + pitchCv + (expFm ? fmCv : 0.f);
+		float linCv = expFm ? 0.f : fmCv * LIN_FM_FACTOR;
 
 		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue();
 		pivotHarm += 0.4f * inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage();
@@ -757,11 +743,10 @@ struct Loom : Module {
 		float sinPhaseOffset = params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getNormalVoltage(env);
 
 		// Pack algorithm inputs
-		std::array<float_4, 4> algoInputs;
-		algoInputs[0] = {length, density, shift, stride}; // Structure section
-		algoInputs[1] = {fmCv, coarse, fine, pitchCv}; // Pitch influences
-		algoInputs[2] = {pivotHarm, intensity, drive, 0}; // Shaping section
-		algoInputs[3] = {syncValue, sinPhaseOffset, 0, 0}; // Misc CV
+		std::array<float_4, 3> algoInputs;
+		algoInputs[0] = {length, density, shift, stride};          // Structure section
+		algoInputs[1] = {expCv, linCv, sinPhaseOffset, syncValue}; // Pitch/phase influences
+		algoInputs[2] = {pivotHarm, intensity, drive, 0.f};        // Shaping section
 
 		// Do stuff
 		auto outsPacked = this->algo.process(args, algoInputs)[0];
@@ -874,19 +859,19 @@ struct LoomWidget : ModuleWidget {
 			Loom* module;
 			bool oversample;
 			void onAction(const event::Action& e) override {
-				module->oversample = oversample;
+				module->algo.oversamplingEnabled = oversample;
 			}
 		};
 
 		{
 			OversampleItem* offItem = createMenuItem<OversampleItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->oversample));
+			offItem->rightText = CHECKMARK(!(module->algo.oversamplingEnabled));
 			offItem->module = module;
 			offItem->oversample = false;
 			menu->addChild(offItem);
 
 			OversampleItem* onItem = createMenuItem<OversampleItem>("2x");
-			onItem->rightText = CHECKMARK(module->oversample);
+			onItem->rightText = CHECKMARK(module->algo.oversamplingEnabled);
 			onItem->module = module;
 			onItem->oversample = true;
 			menu->addChild(onItem);
@@ -899,19 +884,19 @@ struct LoomWidget : ModuleWidget {
 			Loom* module;
 			bool doADAA;
 			void onAction(const event::Action& e) override {
-				module->doADAA = doADAA;
+				module->algo.doADAA = doADAA;
 			}
 		};
 
 		{
 			ADAAItem* offItem = createMenuItem<ADAAItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->doADAA));
+			offItem->rightText = CHECKMARK(!(module->algo.doADAA));
 			offItem->module = module;
 			offItem->doADAA = false;
 			menu->addChild(offItem);
 
 			ADAAItem* onItem = createMenuItem<ADAAItem>("On");
-			onItem->rightText = CHECKMARK(module->doADAA);
+			onItem->rightText = CHECKMARK(module->algo.doADAA);
 			onItem->module = module;
 			onItem->doADAA = true;
 			menu->addChild(onItem);
@@ -924,19 +909,19 @@ struct LoomWidget : ModuleWidget {
 			Loom* module;
 			bool doBlep;
 			void onAction(const event::Action& e) override {
-				module->doBlep = doBlep;
+				module->algo.doBlep = doBlep;
 			}
 		};
 
 		{
 			BlepItem* offItem = createMenuItem<BlepItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->doBlep));
+			offItem->rightText = CHECKMARK(!(module->algo.doBlep));
 			offItem->module = module;
 			offItem->doBlep = false;
 			menu->addChild(offItem);
 
 			BlepItem* onItem = createMenuItem<BlepItem>("On");
-			onItem->rightText = CHECKMARK(module->doBlep);
+			onItem->rightText = CHECKMARK(module->algo.doBlep);
 			onItem->module = module;
 			onItem->doBlep = true;
 			menu->addChild(onItem);
