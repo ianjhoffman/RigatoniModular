@@ -28,7 +28,7 @@ struct PolyBlep {
     inline static float nextIntegratedBlepSample(float t) {    
         constexpr float COEFF_4 = 1.f / 3.f;
         constexpr float COEFF_5 = 1.f / 8.f;
-            
+
         const float t2 = t * t;
         const float t4 = t2 * t2;
         return t4 * COEFF_4 - t * t4 * COEFF_5;

@@ -96,11 +96,16 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
-	PolyBlep<float_4> blep;
+	PolyBlep<float_4> syncBlep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
+
+	// Convenient place to store phases during calculations
+	std::array<float_4, 16> sinPhaseWithoutSync;
+	std::array<float_4, 16> cosPhaseWithoutSync;
+	std::array<float_4, 16> sinPhaseWithSync;
+	std::array<float_4, 16> cosPhaseWithSync;
 
 	// Discrete switched parameters that aren't interpolated
 	bool splitMode{false};
@@ -312,20 +317,20 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
-			minBlepP = syncCrossing - 1.f;
+			minBlepP = syncCrossing;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			minBlepP = -(fundPhaseWrapped / phaseInc);
+			minBlepP = 1.f - (fundPhaseWrapped / phaseInc);
 			syncPhase = fundPhaseWrapped;
 		}
 
 		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
 		// for each output for both synced and unsynced sine and cosine
-		std::array<float_4, 16> out1PhaseWithoutSync;
 		std::array<float_4, 16> &oddHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 1 : 0];
 		std::array<float_4, 16> &evenHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 2 : 0];
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
+		float_4 out1DerivativeDiscSum{}, out2DerivativeDiscSum{};
 
 		// Trying something new with progressive phase multiple calculations.
 		// Calculate the base values for various synthesis parameters for the first 4 harmonics
@@ -334,8 +339,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 basePhaseInc = multiples * phaseInc;
 		float_4 out1SyncPhase = multiples * syncPhase;
-		float_4 out1PmAdd = multiples * sinPhaseOffset;
-		float_4 out2PmAdd = multiples * cosPhaseOffset;
+		float_4 sinPm = multiples * sinPhaseOffset;
+		float_4 cosPm = multiples * cosPhaseOffset;
 
 		float_4 phaseIncAdd = phaseInc * 4.f * stride;
 		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
@@ -343,12 +348,12 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
 		float_4 multipleAdd = 4.f * stride;
 
-		float_4 overallAmplitude;
+		float_4 overallAmplitude, sinWithoutSync, cosWithoutSync;
 		for (int i = 0; i < 16; i++) {
 			// Always update phase accumulators
-			out1PhaseWithoutSync[i] = this->phaseAccumulators[i] + basePhaseInc;
-			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
-			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
+			sinPhaseWithoutSync[i] = this->phaseAccumulators[i] + basePhaseInc;
+			sinPhaseWithoutSync[i] -= simd::floor(sinPhaseWithoutSync[i]);
+			float_4 phaseAccumVal = sinPhaseWithoutSync[i]; // store before doing PM
 
 			if (i < numBlocks) {
 				overallAmplitude = harmonicAmplitudes[i] * simd::fmin(simd::rcp(multiples), this->baseAmplitudes[i]);
@@ -358,53 +363,45 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				);
 				
 				// Phase modulation
-				out1PhaseWithoutSync[i] += out1PmAdd;
-				out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
+				sinPhaseWithoutSync[i] += sinPm;
+				sinPhaseWithoutSync[i] -= simd::floor(sinPhaseWithoutSync[i]);
 
-				// Output 2 doesn't use cosine phase partials in odd/even split mode
-				float_4 out2PhaseWithoutSync = this->splitMode ? out1PhaseWithoutSync[i] : phaseAccumVal + out2PmAdd;
-				out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
+				cosPhaseWithoutSync[i] = phaseAccumVal + cosPm;
+				cosPhaseWithoutSync[i] -= simd::floor(cosPhaseWithoutSync[i]);
 
-				// Calculate sin/cos with amplitudes, sum with output
-				out1WithoutSyncSum += simd::ifelse(
-					oddHarmSplitMask[i],
-					sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
-					0.f
-				);
+				sinWithoutSync = sin2pi_chebyshev(sinPhaseWithoutSync[i]) * overallAmplitude;
+				cosWithoutSync = sin2pi_chebyshev(cosPhaseWithoutSync[i]) * overallAmplitude;
 
-				out2WithoutSyncSum += simd::ifelse(
-					evenHarmSplitMask[i],
-					sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
-					0.f
-				);
+				out1WithoutSyncSum += simd::ifelse(oddHarmSplitMask[i], sinWithoutSync, 0.f);
+				out2WithoutSyncSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinWithoutSync : cosWithoutSync, 0.f);
 			}
 
 			// It turns out that branching in the loop is significantly faster than branchless
 			if (doSync) {
-				float_4 out1PhaseWithSync = out1SyncPhase;
-				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
-				phaseAccumVal = out1PhaseWithSync; // store before doing PM
+				sinPhaseWithSync[i] = out1SyncPhase;
+				sinPhaseWithSync[i] -= simd::floor(sinPhaseWithSync[i]);
+				phaseAccumVal = sinPhaseWithSync[i]; // store before doing PM
 
 				if (i < numBlocks) {
 					// Phase modulation (sync)
-					out1PhaseWithSync += out1PmAdd;
-					out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
+					sinPhaseWithSync[i] += sinPm;
+					sinPhaseWithSync[i] -= simd::floor(sinPhaseWithSync[i]);
 
-					// Output 2 doesn't use cosine phase partials in odd/even split mode
-					float_4 out2PhaseWithSync = this->splitMode ? out1PhaseWithSync : phaseAccumVal + out2PmAdd;
-					out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
+					cosPhaseWithSync[i] = phaseAccumVal + cosPm;
+					cosPhaseWithSync[i] -= simd::floor(cosPhaseWithSync[i]);
 
-					out1WithSyncSum += simd::ifelse(
-						oddHarmSplitMask[i],
-						sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
-						0.f
-					);
+					float_4 sinWithSync = sin2pi_chebyshev(sinPhaseWithSync[i]) * overallAmplitude;
+					float_4 cosWithSync = sin2pi_chebyshev(cosPhaseWithSync[i]) * overallAmplitude;
 
-					out2WithSyncSum += simd::ifelse(
-						evenHarmSplitMask[i],
-						sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
-						0.f
-					);
+					out1WithSyncSum += simd::ifelse(oddHarmSplitMask[i], sinWithSync, 0.f);
+					out2WithSyncSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinWithSync : cosWithSync, 0.f);
+
+					// 1st derivatives
+					float_4 sinDiff = sinWithSync - sinWithoutSync;
+					float_4 cosDiff = cosWithSync - cosWithoutSync;
+
+					out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], cosDiff, 0.f);
+					out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? cosDiff : -sinDiff, 0.f);
 				}
 			}
 
@@ -413,8 +410,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			// Update progressive phase multiple calculations
 			basePhaseInc += phaseIncAdd;
 			out1SyncPhase += syncPhaseAdd;
-			out1PmAdd += sinPhaseOffsetAdd;
-			out2PmAdd += cosPhaseOffsetAdd;
+			sinPm += sinPhaseOffsetAdd;
+			cosPm += cosPhaseOffsetAdd;
 			multiples += multipleAdd;
 		}
 
@@ -432,55 +429,41 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		mainOutsPacked *= (float)this->splitMode + 1.f;
 
 		// Fundamental and square outs are a lot easier
-		auto fundPhaseWithoutSync = out1PhaseWithoutSync[0][0];
-		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
-		float fundOutWithoutSync = sin2pi_chebyshev<float>(fundPhaseWithoutSync);
-		float fundOutWithSync = sin2pi_chebyshev<float>(fundPhaseWithSync);
-		float squareOutWithSync = (fundPhaseWithSync < 0.5f) ? 1.f : -1.f;
+		float_4 fundOutParams = sin2pi_chebyshev<float_4>({
+			sinPhaseWithoutSync[0][0], sinPhaseWithSync[0][0],
+			cosPhaseWithoutSync[0][0], cosPhaseWithSync[0][0],
+		});
 
 		// Oscillator light indicator based on fundamental phase accumulator
-		this->oscLight = fundPhaseWithSync > 0.5f;
+		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
 
 		// Do drive before BLEP, driving BLEP might introduce more aliasing
 		mainOutsPacked *= 0.5f * drive;
 		mainOutsPacked = this->doADAA ? this->driveProcessor.process(mainOutsPacked) : this->driveProcessor.transform(mainOutsPacked);
 
 		// BLEP
-		if (doSync) {
+		if (doSync && this->doBlep) {
 			float_4 discontinuities = {
 				mainOutsPacked[1] - mainOutsPacked[0],
 				mainOutsPacked[3] - mainOutsPacked[2],
-				fundOutWithSync - fundOutWithoutSync,
+				fundOutParams[1] - fundOutParams[0],
 				0.f,
 			};
+			float_4 derivativeDiscontinuities = {
+				sum_float4(out1DerivativeDiscSum),
+				sum_float4(out2DerivativeDiscSum),
+				fundOutParams[3] - fundOutParams[2],
+				0.f,
+			};
+
 			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
+			this->syncBlep.insert1stDerivativeDiscontinuity(minBlepP, derivativeDiscontinuities);
 		}
 
-		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
-
-		if (this->doBlep) {
-			float squareOutWithoutSync = (fundPhaseWithoutSync < 0.5f) ? 1.f : -1.f;
-			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
-			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
-
-			if (normalSync) {
-				// Hard sync step (could be up, could be nothing)
-				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
-			} else if (fundSync) {
-				// Square step up at 0% phase
-				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
-			} else if (squareStepDown) {
-				// Square step down at 50% phase
-				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
-			}
-
-			outsPacked[3] += this->squareBlep.process();
-		}
-
-		auto syncBlepVal = this->syncBlep.process();
-		outsPacked = 5.f * (outsPacked + (this->doBlep ? syncBlepVal : 0.f));
-
-		return std::array<float_4, 1>{outsPacked};
+		this->syncBlep.registerNextSampleValue({mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], 0.f});
+		float_4 outsPacked;
+		this->syncBlep.step(&outsPacked);
+		return std::array<float_4, 1>{5.f * outsPacked};
 	}
 };
 
@@ -752,7 +735,7 @@ struct Loom : Module {
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
-		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
+		outputs[SQUARE_OUTPUT].setVoltage(env);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
