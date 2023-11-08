@@ -312,9 +312,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
-		float scale = phaseInc * clampedStride;
-		float_4 scaledHarmonicLowerBound = harmonicMultipleLimit * scale * .75f;
-		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale * this->getMultiplier());
+		float_4 harmonicFadeLowerBound = harmonicMultipleLimit * .666666666f;
+		float_4 harmonicFalloffSlope = simd::rcp(-.333333333333f * harmonicMultipleLimit);
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
@@ -342,17 +341,22 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		std::array<float_4, 16> &evenHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 2 : 0];
 		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
 
-		// Trying something new with progressive phase multiple calculations for precision (?)
-		float_4 phaseIncAdd = phaseInc * 4.f * stride;
-		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
-		float_4 sinPhaseOffsetAdd = sinPhaseOffset * 4.f * stride;
-		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
-
+		// Trying something new with progressive phase multiple calculations.
+		// Calculate the base values for various synthesis parameters for the first 4 harmonics
+		// as well as the increments of those values for every block of 4 harmonics. This lets
+		// us get rid of a bunch of multiplies inside the synthesis loop.
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 basePhaseInc = multiples * phaseInc;
 		float_4 out1SyncPhase = multiples * syncPhase;
 		float_4 out1PmAdd = multiples * sinPhaseOffset;
 		float_4 out2PmAdd = multiples * cosPhaseOffset;
+
+		float_4 phaseIncAdd = phaseInc * 4.f * stride;
+		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
+		float_4 sinPhaseOffsetAdd = sinPhaseOffset * 4.f * stride;
+		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
+		float_4 multipleAdd = 4.f * stride;
+
 		float_4 overallAmplitude;
 		for (int i = 0; i < 16; i++) {
 			// Always update phase accumulators
@@ -361,10 +365,10 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
 
 			if (i < numBlocks) {
-				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i];
+				overallAmplitude = harmonicAmplitudes[i] * simd::fmin(simd::rcp(multiples), this->baseAmplitudes[i]);
 				// Harmonic falloff between ~.75x and ~1x Nyquist
 				overallAmplitude *= simd::clamp(
-					1.f + (basePhaseInc - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
+					1.f + (multiples - harmonicFadeLowerBound) * harmonicFalloffSlope
 				);
 				
 				// Phase modulation
@@ -425,6 +429,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 			out1SyncPhase += syncPhaseAdd;
 			out1PmAdd += sinPhaseOffsetAdd;
 			out2PmAdd += cosPhaseOffsetAdd;
+			multiples += multipleAdd;
 		}
 
 		// We weren't updating these in the loop so set them here
