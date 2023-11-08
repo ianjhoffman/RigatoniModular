@@ -22,7 +22,7 @@ const int AMP_SHIFT = 60;
 const float LFO_MULTIPLIER = .05f;
 const float VCO_MULTIPLIER = 20.f;
 const float LIN_FM_FACTOR = 5.f;
-const float MAX_FREQ = 10240.f;
+const float MAX_FREQ = 10000.f;
 constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f; // a fifth
 
 // Swap order of every 4-bit chunk
@@ -58,9 +58,9 @@ void shapeAmplitudes(
 		{-10.f * SLOPE_SCALE, 0.f},
 	};
 
-	float belowSlope = SLOPES[tilt][0] * intensity;
-	float aboveSlope = SLOPES[tilt][1] * intensity;
-	float pivotBase = crossfade(0.f, (tilt == 1) ? .25f : 0.f, intensity);
+	float_4 belowSlope = SLOPES[tilt][0] * intensity;
+	float_4 aboveSlope = SLOPES[tilt][1] * intensity;
+	float_4 pivotBase = crossfade(0.f, (tilt == 1) ? .25f : 0.f, intensity);
 	float_4 pivotDiffs = pivotHarm - float_4(0.f, 1.f, 2.f, 3.f);
 	auto shiftAmt = AMP_SHIFT;
 	harmonicMask = flipNibbleEndian(harmonicMask);
@@ -554,10 +554,10 @@ struct Loom : Module {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
 				if (module->lfoMode) {
-					// 0.003125Hz (320 second cycle) to 25.6Hz
+					// 0.003125Hz (320 second cycle) to 25Hz
 					displayMultiplier = LFO_MULTIPLIER;
 				} else {
-					// 1.25Hz to 10.24kHz
+					// 1.25Hz to 10kHz
 					displayMultiplier = VCO_MULTIPLIER;
 				}
 				return ParamQuantity::getDisplayValue();
@@ -591,7 +591,7 @@ struct Loom : Module {
 		};
 
 		// Control Knobs
-		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
+		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 8.965784284662087f, 1.f, "Coarse Tune", " Hz", 2.f);
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
 		configParam(HARM_COUNT_KNOB_PARAM, -2.f, 2.f, -2.f, "Harmonic Count", " Partials", 2.f, 16.8, -3.2);
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
@@ -626,7 +626,7 @@ struct Loom : Module {
 		configSwitch(LIN_EXP_FM_SWITCH_PARAM, 0.f, 1.f, 0.f, "FM Response", {"Lin", "Exp"});
 		configSwitch(SPECTRAL_TILT_SWITCH_PARAM, 0.f, 2.f, 0.f, "Spectral Tilt", {"Lowpass", "Bandpass", "Highpass"});
 		configSwitch(BOOST_FUNDAMENTAL_SWITCH_PARAM, 0.f, 1.f, 1.f, "Boost Fundamental", {"Off", "On"});
-		configSwitch(OUTPUT_MODE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Output Mode", {"Quadrature", "Odd/Even"});
+		configSwitch(OUTPUT_MODE_SWITCH_PARAM, 0.f, 1.f, 0.f, "Output Mode", {"Quadrature", "Odd/Even"});
 
 		// Inputs
 		configInput(HARM_COUNT_CV_INPUT, "Harmonic Count CV");
@@ -689,13 +689,13 @@ struct Loom : Module {
 
 	void process(const ProcessArgs& args) override {
 		// Read and set discrete parameters that aren't interpolated
-		algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
+		this->algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
 			(int)params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue()
 		);
 
-		algo.boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
-		algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
-		algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
+		this->algo.boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
+		this->algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
+		this->algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 
 		// Get ping envelope so we have it for normalling to unpatched CV inputs
 		float pingValue = clamp(inputs[PING_INPUT].getVoltage(), 0.f, 8.f);
