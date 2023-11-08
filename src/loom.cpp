@@ -53,16 +53,14 @@ void shapeAmplitudes(
 ) {
 	constexpr float SLOPE_SCALE = 0.01f;
 	constexpr float SLOPES[3][2] = {
-		{              0.f, -2.f * SLOPE_SCALE},
-		{3.f * SLOPE_SCALE, 3.f * SLOPE_SCALE},
-		{2.f * SLOPE_SCALE, 0.f},
+		{                0.f, 10.f * SLOPE_SCALE},
+		{-15.f * SLOPE_SCALE, 15.f * SLOPE_SCALE},
+		{-10.f * SLOPE_SCALE, 0.f},
 	};
 
-	float doubleIntensity = intensity * 2.f;
-	float slopeMultiplier = (doubleIntensity < 1.f) ? (doubleIntensity * 4.f) : (8.f * doubleIntensity - 4.f);
-	float belowSlope = SLOPES[tilt][0] * slopeMultiplier;
-	float aboveSlope = SLOPES[tilt][1] * slopeMultiplier;
-	float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(doubleIntensity));
+	float belowSlope = SLOPES[tilt][0] * intensity;
+	float aboveSlope = SLOPES[tilt][1] * intensity;
+	float pivotBase = crossfade(0.f, (tilt == 1) ? .25f : 0.f, intensity);
 	float_4 pivotDiffs = pivotHarm - float_4(0.f, 1.f, 2.f, 3.f);
 	auto shiftAmt = AMP_SHIFT;
 	harmonicMask = flipNibbleEndian(harmonicMask);
