@@ -97,8 +97,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	PolyBlep<float_4> syncBlep;
-	HighOrderLinearBlep<8, 16, float_4> highOrderBlep;
+	//PolyBlep<float_4> syncBlep;
+	HighOrderLinearBlep<8, 16, float_4> syncBlep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
@@ -319,11 +319,11 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float blepT = 0.f;
 		if (normalSync) {
 			doSync = true;
-			blepT = 1.f - syncCrossing;
+			blepT = syncCrossing;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			blepT = fundPhaseWrapped / phaseInc;
+			blepT = 1.f - (fundPhaseWrapped / phaseInc);
 			syncPhase = fundPhaseWrapped;
 		}
 
@@ -449,20 +449,27 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				fundOutParams[1] - fundOutParams[0],
 				0.f,
 			};
-			float_4 derivativeDiscontinuities = {
+			float_4 order1Discontinuities = {
 				sum_float4(out1DerivativeDiscSum),
 				sum_float4(out2DerivativeDiscSum),
 				fundOutParams[3] - fundOutParams[2],
 				0.f,
 			};
+			float_4 order2Discontinuities = -discontinuities;
+			float_4 order3Discontinuities = -order1Discontinuities;
 
-			this->syncBlep.insertDiscontinuity(blepT, discontinuities);
-			this->syncBlep.insert1stDerivativeDiscontinuity(blepT, derivativeDiscontinuities);
+			this->syncBlep.insertDiscontinuities(
+				blepT,
+				discontinuities,
+				order1Discontinuities,
+				order2Discontinuities,
+				order3Discontinuities
+			);
 		}
 
-		this->syncBlep.registerNextSampleValue({mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], 0.f});
 		float_4 outsPacked;
-		this->syncBlep.step(&outsPacked);
+		mainOutsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], 0.f};
+		this->syncBlep.processSample(mainOutsPacked, outsPacked);
 
 		// Do drive last so discontinuities for BLEP are accurate
 		outsPacked *= 0.5f * drive;

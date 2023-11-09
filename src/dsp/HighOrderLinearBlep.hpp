@@ -80,28 +80,48 @@ struct HighOrderLinearBlep {
      * but with special rules to not interpolate across any
      * discontinuities at the midpoint of our residual tables.
      */
-    float interpolateResidual(float *resid, float fracIndex) {
-        return 0.f; // TODO
+    float interpolateResidual(float *resid, float fracIndex, bool flipAtCenter = false) {
+        int idx = fracIndex;
+	    float fade = fracIndex - idx;
+
+        float a = resid[idx];
+        float b = ((idx == MID_IDX - 1) && flipAtCenter) ? -resid[idx + 1] : resid[idx + 1];
+	    return a + (b - a) * fade;
     }
 
     /*
      * Insert discontinuities in the 0th, 1st, 2nd, and 3rd derivatives of the signal to
      * be smoothed by BLEP. The discontinuity is centered -1 < t <= 0 samples in the past.
      */
-    void insertDiscontinuities(float t, T &order0, T &order1 = T(0), T &order2 = T(0), T &order3 = T(0)) {
-        if (!(-1 < t && t <= 0)) return;
+    void insertDiscontinuities(float t, const T &order0, const T &order1, const T &order2, const T &order3) {
+        if (!(0 <= t && t < 1)) return;
 
         int bufIndex = readPos;
         for (int i = 0; i < BUF_SIZE; i++) {
 			float blepIndex = ((float)i - t) * O;
 
-			buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex);
+			buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex, true);
             buf[bufIndex] += order1 * interpolateResidual(resid1, blepIndex);
             buf[bufIndex] += order2 * interpolateResidual(resid2, blepIndex);
             buf[bufIndex] += order3 * interpolateResidual(resid3, blepIndex);
 
             bufIndex = (bufIndex + 1 == BUF_SIZE) ? 0 : bufIndex + 1;
 		}
+    }
+
+    void insertDiscontinuities(float t, const T &order0, const T &order1, const T &order2) {
+        const T NO_DISC = T(0);
+        insertDiscontinuities(t, order0, order1, order2, NO_DISC);
+    }
+
+    void insertDiscontinuities(float t, const T &order0, const T &order1) {
+        const T NO_DISC = T(0);
+        insertDiscontinuities(t, order0, order1, NO_DISC, NO_DISC);
+    }
+
+    void insertDiscontinuities(float t, const T &order0) {
+        const T NO_DISC = T(0);
+        insertDiscontinuities(t, order0, NO_DISC, NO_DISC, NO_DISC);
     }
 
     /*
