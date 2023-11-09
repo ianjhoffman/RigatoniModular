@@ -461,15 +461,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
 			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
 
+			if (fundSync) {
+				// Square step up at 0% phase
+				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
+			}
+			if (squareStepDown) {
+				// Square step down at 50% phase
+				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
+			}
 			if (normalSync) {
 				// Hard sync step (could be up, could be nothing)
 				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
-			} else if (fundSync) {
-				// Square step up at 0% phase
-				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
-			} else if (squareStepDown) {
-				// Square step down at 50% phase
-				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
 			}
 
 			outsPacked[3] += this->squareBlep.process();
