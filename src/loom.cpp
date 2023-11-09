@@ -100,8 +100,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	// dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
 	// PolyBlep<float_4> syncBlep;
 	HighOrderLinearBlep<8, 16, float_4> syncBlep;
-	dsp::MinBlepGenerator<16, 16, float> squareBlep;
-	HighOrderLinearBlep<8, 16, float> squareBlep2;
+	//dsp::MinBlepGenerator<16, 16, float> squareBlep;
+	HighOrderLinearBlep<8, 16, float> squareBlep;
+	//PolyBlep<float> squareBlep;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
 
@@ -476,21 +477,21 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 			if (fundSync) {
 				// Square step up at 0% phase
-				this->squareBlep2.insertDiscontinuities(fundPhaseWrapped / phaseInc, 2.f);
+				this->squareBlep.insertDiscontinuities(fundPhaseWrapped / phaseInc, 2.f);
 			}
 			if (squareStepDown) {
 				// Square step down at 50% phase
 				//this->squareBlep2.insertDiscontinuities(squareHalfCrossing - 1.f, -2.f);
-				this->squareBlep2.insertDiscontinuities(1.f - squareHalfCrossing, -2.f);
+				this->squareBlep.insertDiscontinuities(1.f - squareHalfCrossing, -2.f);
 			}
 			if (normalSync) {
 				// Hard sync step (could be up, could be nothing)
-				this->squareBlep2.insertDiscontinuities(minBlepP, squareOutWithSync - squareOutWithoutSync);
+				this->squareBlep.insertDiscontinuities(minBlepP, squareOutWithSync - squareOutWithoutSync);
 			}
 
 			//mainOutsPacked[3] += this->squareBlep.process();
 			float squareVal;
-			this->squareBlep2.processSample(squareOutWithSync, squareVal);
+			this->squareBlep.processSample(squareOutWithSync, squareVal);
 			outsPacked[3] = squareVal;
 		}
 
