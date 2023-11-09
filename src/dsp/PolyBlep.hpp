@@ -17,21 +17,20 @@ struct PolyBlep {
     PolyBlep(): thisSample(0), nextSample(0) {}
 
     inline static float thisBlepSample(float t) {
-        const float t2 = t * t;
-        return t * t2 - 0.5f * t2 * t2;
+        return 0.5f * t * t;
     }
 
     inline static float nextBlepSample(float t) {
         return -thisBlepSample(1.f - t);
     }
 
-    inline static float nextIntegratedBlepSample(float t) {    
-        constexpr float COEFF_4 = 1.f / 3.f;
-        constexpr float COEFF_5 = 1.f / 8.f;
+    inline static float nextIntegratedBlepSample(float t) {  
+        constexpr float OFFSET = 3.f / 16.f;
 
-        const float t2 = t * t;
+        const float t1 = 0.5f * t;
+        const float t2 = t1 * t1;
         const float t4 = t2 * t2;
-        return t4 * COEFF_4 - t * t4 * COEFF_5;
+        return OFFSET - t1 + 1.5f * t2 - t4;  
     }
 
     inline static float thisIntegratedBlepSample(float t) {

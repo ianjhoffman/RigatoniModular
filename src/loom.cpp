@@ -314,14 +314,14 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		// 2 types of sync that can introduce discontinuities
 		bool doSync = false;
 		float syncPhase = 0.f;
-		float minBlepP = 0.f;
+		float blepT = 0.f;
 		if (normalSync) {
 			doSync = true;
-			minBlepP = syncCrossing;
+			blepT = 1.f - syncCrossing;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			minBlepP = 1.f - (fundPhaseWrapped / phaseInc);
+			blepT = fundPhaseWrapped / phaseInc;
 			syncPhase = fundPhaseWrapped;
 		}
 
@@ -419,6 +419,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		if (!doSync) {
 			out1WithSyncSum = out1WithoutSyncSum;
 			out2WithSyncSum = out2WithoutSyncSum;
+			sinPhaseWithSync[0] = sinPhaseWithoutSync[0];
+			cosPhaseWithSync[0] = cosPhaseWithoutSync[0];
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
@@ -437,10 +439,6 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		// Oscillator light indicator based on fundamental phase accumulator
 		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
 
-		// Do drive before BLEP, driving BLEP might introduce more aliasing
-		mainOutsPacked *= 0.5f * drive;
-		mainOutsPacked = this->doADAA ? this->driveProcessor.process(mainOutsPacked) : this->driveProcessor.transform(mainOutsPacked);
-
 		// BLEP
 		if (doSync && this->doBlep) {
 			float_4 discontinuities = {
@@ -456,13 +454,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				0.f,
 			};
 
-			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
-			this->syncBlep.insert1stDerivativeDiscontinuity(minBlepP, derivativeDiscontinuities);
+			this->syncBlep.insertDiscontinuity(blepT, discontinuities);
+			this->syncBlep.insert1stDerivativeDiscontinuity(blepT, derivativeDiscontinuities);
 		}
 
 		this->syncBlep.registerNextSampleValue({mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], 0.f});
 		float_4 outsPacked;
 		this->syncBlep.step(&outsPacked);
+
+		// Do drive last so discontinuities for BLEP are accurate
+		outsPacked *= 0.5f * drive;
+		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
 		return std::array<float_4, 1>{5.f * outsPacked};
 	}
 };
