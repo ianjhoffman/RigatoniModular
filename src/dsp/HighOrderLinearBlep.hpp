@@ -1,9 +1,5 @@
 #pragma once
 
-#include "rack.hpp"
-
-using namespace rack;
-
 // See https://www.native-instruments.com/fileadmin/ni_media/downloads/pdf/SineSync.pdf
 template<int Z, int O, typename T>
 struct HighOrderLinearBlep {
@@ -72,12 +68,51 @@ struct HighOrderLinearBlep {
             calcResid[i] = oneThird * (piX * calcResid[i] - M_1_PI * std::cos(piX));
             calcResid[i] *= blackmanWindow(piX);
             resid3[i] = calcResid[i];
-
-            DEBUG("%f, %f, %f, %f", resid0[i], resid1[i], resid2[i], resid3[i]);
         }
     }
 
     HighOrderLinearBlep() {
         populateResiduals();
+    }
+
+    /*
+     * Similar to simple linear interpolation of an array
+     * but with special rules to not interpolate across any
+     * discontinuities at the midpoint of our residual tables.
+     */
+    float interpolateResidual(float *resid, float fracIndex) {
+        return 0.f; // TODO
+    }
+
+    /*
+     * Insert discontinuities in the 0th, 1st, 2nd, and 3rd derivatives of the signal to
+     * be smoothed by BLEP. The discontinuity is centered -1 < t <= 0 samples in the past.
+     */
+    void insertDiscontinuities(float t, T &order0, T &order1 = T(0), T &order2 = T(0), T &order3 = T(0)) {
+        if (!(-1 < t && t <= 0)) return;
+
+        int bufIndex = readPos;
+        for (int i = 0; i < BUF_SIZE; i++) {
+			float blepIndex = ((float)i - t) * O;
+
+			buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex);
+            buf[bufIndex] += order1 * interpolateResidual(resid1, blepIndex);
+            buf[bufIndex] += order2 * interpolateResidual(resid2, blepIndex);
+            buf[bufIndex] += order3 * interpolateResidual(resid3, blepIndex);
+
+            bufIndex = (bufIndex + 1 == BUF_SIZE) ? 0 : bufIndex + 1;
+		}
+    }
+
+    /*
+     * Write the current uncorrected sample to a time slightly in the future and
+     * return the current corrected sample to the caller in the provided reference.
+     */
+    void processSample(T &currSample, T &out) {
+        out = buf[readPos];
+        buf[readPos] = T(0);
+        buf[writePos] += currSample;
+        readPos = (readPos + 1) % BUF_SIZE;
+        writePos = (writePos + 1) % BUF_SIZE;
     }
 };
