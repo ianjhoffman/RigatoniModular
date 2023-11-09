@@ -100,10 +100,10 @@ struct HighOrderLinearBlep {
         for (int i = 0; i < BUF_SIZE; i++) {
 			float blepIndex = ((float)i + t) * O;
 
-			buf[bufIndex] -= order0 * interpolateResidual(resid0, blepIndex, true);
-            buf[bufIndex] -= order1 * interpolateResidual(resid1, blepIndex);
-            buf[bufIndex] -= order2 * interpolateResidual(resid2, blepIndex);
-            buf[bufIndex] -= order3 * interpolateResidual(resid3, blepIndex);
+			buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex, true);
+            buf[bufIndex] += order1 * interpolateResidual(resid1, blepIndex);
+            buf[bufIndex] += order2 * interpolateResidual(resid2, blepIndex);
+            buf[bufIndex] += order3 * interpolateResidual(resid3, blepIndex);
 
             bufIndex = (bufIndex + 1 == BUF_SIZE) ? 0 : bufIndex + 1;
 		}

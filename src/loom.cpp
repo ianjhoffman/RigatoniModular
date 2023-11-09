@@ -97,10 +97,11 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
+	// dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
 	// PolyBlep<float_4> syncBlep;
-	// HighOrderLinearBlep<8, 16, float_4> syncBlep;
+	HighOrderLinearBlep<8, 16, float_4> syncBlep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
+	HighOrderLinearBlep<8, 16, float> squareBlep2;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
 
@@ -320,11 +321,13 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
-			minBlepP = syncCrossing - 1.f;
+			//minBlepP = syncCrossing - 1.f;
+			minBlepP = 1.f - syncCrossing;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			minBlepP = -(fundPhaseWrapped / phaseInc);
+			//minBlepP = -(fundPhaseWrapped / phaseInc);
+			minBlepP = fundPhaseWrapped / phaseInc;
 			syncPhase = fundPhaseWrapped;
 		}
 
@@ -444,17 +447,27 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
 
 		// BLEP
-		if (doSync) {
-			float_4 discontinuities = {
+		if (doSync && this->doBlep) {
+			float_4 discOrder0 = {
 				mainOutsPacked[1] - mainOutsPacked[0],
 				mainOutsPacked[3] - mainOutsPacked[2],
 				fundOutParams[1] - fundOutParams[0],
-				0.f,
+				0.f
 			};
-			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
+			float_4 discOrder1 = {
+				sum_float4(out1DerivativeDiscSum),
+				sum_float4(out2DerivativeDiscSum),
+				fundOutParams[3] - fundOutParams[2],
+				0.f
+			};
+			float_4 discOrder2 = -discOrder0;
+			float_4 discOrder3 = -discOrder1;
+			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1, discOrder2, discOrder3);
 		}
 
-		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], squareOutWithSync};
+		mainOutsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], squareOutWithSync};
+		float_4 outsPacked;
+		this->syncBlep.processSample(mainOutsPacked, outsPacked);
 
 		if (this->doBlep) {
 			float squareOutWithoutSync = (sinPhaseWithoutSync[0][0] < 0.5f) ? 1.f : -1.f;
@@ -463,22 +476,24 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 			if (fundSync) {
 				// Square step up at 0% phase
-				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
+				this->squareBlep2.insertDiscontinuities(fundPhaseWrapped / phaseInc, 2.f);
 			}
 			if (squareStepDown) {
 				// Square step down at 50% phase
-				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
+				//this->squareBlep2.insertDiscontinuities(squareHalfCrossing - 1.f, -2.f);
+				this->squareBlep2.insertDiscontinuities(1.f - squareHalfCrossing, -2.f);
 			}
 			if (normalSync) {
 				// Hard sync step (could be up, could be nothing)
-				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
+				this->squareBlep2.insertDiscontinuities(minBlepP, squareOutWithSync - squareOutWithoutSync);
 			}
 
-			outsPacked[3] += this->squareBlep.process();
+			//mainOutsPacked[3] += this->squareBlep.process();
+			float squareVal;
+			this->squareBlep2.processSample(squareOutWithSync, squareVal);
+			outsPacked[3] = squareVal;
 		}
 
-		auto syncBlepVal = this->syncBlep.process();
-		outsPacked += this->doBlep ? syncBlepVal : 0.f;
 		outsPacked *= 0.5f * drive;
 		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
 		return std::array<float_4, 1>{5.f * outsPacked};
