@@ -97,8 +97,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	//PolyBlep<float_4> syncBlep;
-	HighOrderLinearBlep<8, 16, float_4> syncBlep;
+	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
+	// PolyBlep<float_4> syncBlep;
+	// HighOrderLinearBlep<8, 16, float_4> syncBlep;
 	dsp::MinBlepGenerator<16, 16, float> squareBlep;
 	float lastSyncValue{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
@@ -316,14 +317,14 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		// 2 types of sync that can introduce discontinuities
 		bool doSync = false;
 		float syncPhase = 0.f;
-		float blepT = 0.f;
+		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
-			blepT = syncCrossing;
+			minBlepP = syncCrossing - 1.f;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			blepT = 1.f - (fundPhaseWrapped / phaseInc);
+			minBlepP = -(fundPhaseWrapped / phaseInc);
 			syncPhase = fundPhaseWrapped;
 		}
 
@@ -437,41 +438,45 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			sinPhaseWithoutSync[0][0], sinPhaseWithSync[0][0],
 			cosPhaseWithoutSync[0][0], cosPhaseWithSync[0][0],
 		});
+		float squareOutWithSync = (this->phaseAccumulators[0][0] < 0.5f) ? 1.f : -1.f;
 
 		// Oscillator light indicator based on fundamental phase accumulator
 		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
 
 		// BLEP
-		if (doSync && this->doBlep) {
+		if (doSync) {
 			float_4 discontinuities = {
 				mainOutsPacked[1] - mainOutsPacked[0],
 				mainOutsPacked[3] - mainOutsPacked[2],
 				fundOutParams[1] - fundOutParams[0],
 				0.f,
 			};
-			float_4 order1Discontinuities = {
-				sum_float4(out1DerivativeDiscSum),
-				sum_float4(out2DerivativeDiscSum),
-				fundOutParams[3] - fundOutParams[2],
-				0.f,
-			};
-			float_4 order2Discontinuities = -discontinuities;
-			float_4 order3Discontinuities = -order1Discontinuities;
-
-			this->syncBlep.insertDiscontinuities(
-				blepT,
-				discontinuities,
-				order1Discontinuities,
-				order2Discontinuities,
-				order3Discontinuities
-			);
+			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
 		}
 
-		float_4 outsPacked;
-		mainOutsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], 0.f};
-		this->syncBlep.processSample(mainOutsPacked, outsPacked);
+		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], squareOutWithSync};
 
-		// Do drive last so discontinuities for BLEP are accurate
+		if (this->doBlep) {
+			float squareOutWithoutSync = (sinPhaseWithoutSync[0][0] < 0.5f) ? 1.f : -1.f;
+			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
+			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
+
+			if (normalSync) {
+				// Hard sync step (could be up, could be nothing)
+				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
+			} else if (fundSync) {
+				// Square step up at 0% phase
+				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
+			} else if (squareStepDown) {
+				// Square step down at 50% phase
+				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
+			}
+
+			outsPacked[3] += this->squareBlep.process();
+		}
+
+		auto syncBlepVal = this->syncBlep.process();
+		outsPacked += this->doBlep ? syncBlepVal : 0.f;
 		outsPacked *= 0.5f * drive;
 		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
 		return std::array<float_4, 1>{5.f * outsPacked};
@@ -746,7 +751,8 @@ struct Loom : Module {
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
-		outputs[SQUARE_OUTPUT].setVoltage(env);
+		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
+		//outputs[SQUARE_OUTPUT].setVoltage(env);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
