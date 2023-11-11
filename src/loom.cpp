@@ -98,6 +98,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
 	HighOrderLinearBlep<8, 16, float_4> syncBlep;
+	// dsp::MinBlepGenerator<8, 16, float_4> syncBlep2;
 	float lastSyncValue{0.f};
 	float lastFundPhase{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
@@ -124,7 +125,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Additional configurable parameters for anti-aliasing
 	bool doADAA{true};
-	bool doBlep{true};
+	int doBlep{1};
 
 	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4>(ParameterInterpolator<3, float_4>()) {
 		// Set up everything pre-cached/pre-allocated
@@ -318,12 +319,16 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
-			minBlepP = 1.f - syncCrossing;
+			minBlepP = 1.f - syncCrossing; // for linear phase blep
+			// minBlepP = syncCrossing - 1.f; // for minblep
 			syncPhase = normalSyncPhase;
+			// DEBUG("normal sync");
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			minBlepP = fundPhaseWrapped / phaseInc;
+			minBlepP = fundPhaseWrapped / phaseInc; // for linear phase blep
+			// minBlepP = -(fundPhaseWrapped / phaseInc); // for minblep
 			syncPhase = fundPhaseWrapped;
+			// DEBUG("fund sync");
 		}
 
 		this->lastFundPhase = syncPhase;
@@ -445,12 +450,34 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				this->vecTransfer[3] - this->vecTransfer[2],
 				0.f
 			};
+			auto discOrder2 = -discOrder0;
+			auto discOrder3 = -discOrder1;
+			// DEBUG(
+			// 	"Without vs. with sync: %f, %f, %f, %f, %f, %f, %f, %f",
+			// 	outsWithoutSync[0], outsWithSync[0], outsWithoutSync[1], outsWithSync[1],
+			// 	outsWithoutSync[2], outsWithSync[2], outsWithoutSync[3], outsWithSync[3]
+			// );
 			// DEBUG("Inserting discontinuities at %f: %f, %f, %f, %f", minBlepP, discOrder0[0], discOrder0[1], discOrder0[2], discOrder0[3]);
-			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1);
+			// this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1);
+			switch (this->doBlep) {
+				case 1:
+					this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);
+					break;
+				case 2:
+					this->syncBlep.insertDiscontinuities(minBlepP, discOrder0, discOrder1);
+					break;
+				case 3:
+					this->syncBlep.insertDiscontinuities(minBlepP, discOrder0, discOrder1, discOrder2);
+					break;
+				default:
+					this->syncBlep.insertDiscontinuities(minBlepP, discOrder0, discOrder1, discOrder2, discOrder3);
+			}
+			// this->syncBlep2.insertDiscontinuity(minBlepP, discOrder0);
 		}
 
 		float_4 outsPacked;
 		this->syncBlep.processSample(outsWithSync, outsPacked);
+		// float_4 outsPacked = outsWithSync + syncBlep2.process();
 		// DEBUG(
 		// 	"Process: %f, %f, %f, %f, %f, %f, %f, %f",
 		// 	outsWithSync[0], outsPacked[0], outsWithSync[1], outsPacked[1],
@@ -646,7 +673,7 @@ struct Loom : Module {
 		json_t* rootJ = json_object();
 		json_object_set_new(rootJ, "oversample", json_boolean(this->algo.oversamplingEnabled));
 		json_object_set_new(rootJ, "doADAA", json_boolean(this->algo.doADAA));
-		json_object_set_new(rootJ, "doBlep", json_boolean(this->algo.doBlep));
+		json_object_set_new(rootJ, "doBlep", json_integer(this->algo.doBlep));
 		return rootJ;
 	}
 
@@ -663,7 +690,7 @@ struct Loom : Module {
 
 		json_t* doBlepJ = json_object_get(rootJ, "doBlep");
 		if (doBlepJ) {
-			this->algo.doBlep = json_boolean_value(doBlepJ);
+			this->algo.doBlep = json_integer_value(doBlepJ);
 		}
 	}
 
@@ -886,7 +913,7 @@ struct LoomWidget : ModuleWidget {
 
 		struct BlepItem : MenuItem {
 			Loom* module;
-			bool doBlep;
+			int doBlep;
 			void onAction(const event::Action& e) override {
 				module->algo.doBlep = doBlep;
 			}
@@ -896,14 +923,32 @@ struct LoomWidget : ModuleWidget {
 			BlepItem* offItem = createMenuItem<BlepItem>("Off");
 			offItem->rightText = CHECKMARK(!(module->algo.doBlep));
 			offItem->module = module;
-			offItem->doBlep = false;
+			offItem->doBlep = 0;
 			menu->addChild(offItem);
 
-			BlepItem* onItem = createMenuItem<BlepItem>("On");
-			onItem->rightText = CHECKMARK(module->algo.doBlep);
-			onItem->module = module;
-			onItem->doBlep = true;
-			menu->addChild(onItem);
+			BlepItem* onItem1 = createMenuItem<BlepItem>("0th Order");
+			onItem1->rightText = CHECKMARK(module->algo.doBlep == 1);
+			onItem1->module = module;
+			onItem1->doBlep = 1;
+			menu->addChild(onItem1);
+
+			BlepItem* onItem2 = createMenuItem<BlepItem>("1st Order");
+			onItem2->rightText = CHECKMARK(module->algo.doBlep == 2);
+			onItem2->module = module;
+			onItem2->doBlep = 2;
+			menu->addChild(onItem2);
+
+			BlepItem* onItem3 = createMenuItem<BlepItem>("2nd Order");
+			onItem3->rightText = CHECKMARK(module->algo.doBlep == 3);
+			onItem3->module = module;
+			onItem3->doBlep = 3;
+			menu->addChild(onItem3);
+
+			BlepItem* onItem4 = createMenuItem<BlepItem>("3rd Order");
+			onItem4->rightText = CHECKMARK(module->algo.doBlep == 4);
+			onItem4->module = module;
+			onItem4->doBlep = 4;
+			menu->addChild(onItem4);
 		}
 	}
 };
