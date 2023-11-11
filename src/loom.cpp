@@ -445,11 +445,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				this->vecTransfer[3] - this->vecTransfer[2],
 				0.f
 			};
+			// DEBUG("Inserting discontinuities at %f: %f, %f, %f, %f", minBlepP, discOrder0[0], discOrder0[1], discOrder0[2], discOrder0[3]);
 			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1);
 		}
 
 		float_4 outsPacked;
 		this->syncBlep.processSample(outsWithSync, outsPacked);
+		// DEBUG(
+		// 	"Process: %f, %f, %f, %f, %f, %f, %f, %f",
+		// 	outsWithSync[0], outsPacked[0], outsWithSync[1], outsPacked[1],
+		// 	outsWithSync[2], outsPacked[2], outsWithSync[3], outsPacked[3]
+		// );
 		float ampScale = 0.5f * drive * ((float)this->splitMode + 1.f);
 		outsPacked *= {ampScale, ampScale, 1.f, 0.f};
 		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
@@ -500,7 +506,7 @@ struct Loom : Module {
 		INPUTS_LEN
 	};
 	enum OutputId {
-		SQUARE_OUTPUT,
+		ENV_OUTPUT,
 		FUNDAMENTAL_OUTPUT,
 		ODD_ZERO_DEGREE_OUTPUT,
 		EVEN_NINETY_DEGREE_OUTPUT,
@@ -616,7 +622,7 @@ struct Loom : Module {
 		configInput(HARM_SHIFT_CV_INPUT, "Harmonic Shift CV");
 
 		// Outputs
-		configOutput(SQUARE_OUTPUT, "Square");
+		configOutput(ENV_OUTPUT, "Square");
 		configOutput(FUNDAMENTAL_OUTPUT, "Fundamental (Sine)");
 		configOutput(ODD_ZERO_DEGREE_OUTPUT, "Odd / 0°");
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
@@ -726,7 +732,7 @@ struct Loom : Module {
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
-		outputs[SQUARE_OUTPUT].setVoltage(env);
+		outputs[ENV_OUTPUT].setVoltage(env);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
@@ -804,7 +810,7 @@ struct LoomWidget : ModuleWidget {
 		// Outputs
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 99.133)), module, Loom::FUNDAMENTAL_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(83.855, 99.133)), module, Loom::ODD_ZERO_DEGREE_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 111.249)), module, Loom::SQUARE_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 111.249)), module, Loom::ENV_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(83.855, 111.249)), module, Loom::EVEN_NINETY_DEGREE_OUTPUT));
 
 		// Multi-colored LEDs
