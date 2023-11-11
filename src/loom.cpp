@@ -313,12 +313,13 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 		// Calculate fundamental sync for non-free continuous stride
 		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
-		float fundPhaseWrapped = fundAccumBeforeInc + phaseInc - 1.f;
-		bool fundSync = fundPhaseWrapped >= 0.f;
+		float fundPhaseWrapped = fundAccumBeforeInc + phaseInc;
+		bool fundSync = fundPhaseWrapped >= 1.f;
+		fundPhaseWrapped -= std::floor(fundPhaseWrapped);
 
 		// 2 types of sync that can introduce discontinuities
 		bool doSync = false;
-		float syncPhase = 0.f;
+		float syncPhase = fundPhaseWrapped;
 		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
@@ -431,45 +432,35 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
-		float_4 mainOutsPacked = {out1WithoutSyncSum[0], out1WithSyncSum[0], out2WithoutSyncSum[0], out2WithSyncSum[0]};
-		mainOutsPacked += {out1WithoutSyncSum[1], out1WithSyncSum[1], out2WithoutSyncSum[1], out2WithSyncSum[1]};
-		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
-		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
-		mainOutsPacked *= (float)this->splitMode + 1.f;
-
-		// Fundamental and square outs are a lot easier
-		float_4 fundOutParams = sin2pi_chebyshev<float_4>({
-			sinPhaseWithoutSync[0][0], sinPhaseWithSync[0][0],
-			cosPhaseWithoutSync[0][0], cosPhaseWithSync[0][0],
-		});
-		float squareOutWithSync = (this->phaseAccumulators[0][0] < 0.5f) ? 1.f : -1.f;
+		float ampScale = (float)this->splitMode + 1.f;
+		float_4 outsWithSync = {sum_float4(out1WithSyncSum), sum_float4(out2WithSyncSum), 0.f, 0.f};
+		float_4 outsWithoutSync = {sum_float4(out1WithoutSyncSum), sum_float4(out2WithoutSyncSum), 0.f, 0.f};
+		outsWithSync *= ampScale;
+		outsWithoutSync *= ampScale;
 
 		// Oscillator light indicator based on fundamental phase accumulator
 		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
 
 		// BLEP
 		if (doSync && this->doBlep) {
-			float_4 discOrder0 = {
-				mainOutsPacked[1] - mainOutsPacked[0],
-				mainOutsPacked[3] - mainOutsPacked[2],
-				fundOutParams[1] - fundOutParams[0],
-				0.f
-			};
+			// Note: the SIMD/Vector implementation in Rack SDK uses _mm_set_ps,
+			// which reverses the order of 
+			float_4 discOrder0 = outsWithSync - outsWithoutSync;
 			float_4 discOrder1 = {
 				sum_float4(out1DerivativeDiscSum),
 				sum_float4(out2DerivativeDiscSum),
-				fundOutParams[3] - fundOutParams[2],
+				0.f,
 				0.f
 			};
-			float_4 discOrder2 = -discOrder0;
-			float_4 discOrder3 = -discOrder1;
+			// float_4 discOrder2 = -discOrder0;
+			// float_4 discOrder3 = -discOrder1;
 			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1, discOrder2, discOrder3);
 		}
 
-		mainOutsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutParams[1], squareOutWithSync};
 		float_4 outsPacked;
-		this->syncBlep.processSample(mainOutsPacked, outsPacked);
+		this->syncBlep.processSample(outsWithSync, outsPacked);
 
+		/*
 		if (this->doBlep) {
 			float squareOutWithoutSync = (sinPhaseWithoutSync[0][0] < 0.5f) ? 1.f : -1.f;
 			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
@@ -494,6 +485,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			this->squareBlep.processSample(squareOutWithSync, squareVal);
 			outsPacked[3] = squareVal;
 		}
+		*/
 
 		outsPacked *= 0.5f * drive;
 		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
