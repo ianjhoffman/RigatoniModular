@@ -38,22 +38,18 @@ struct PolyBlep {
     }
 
     void insertDiscontinuity(float t, T magnitude) {
-        this->thisSample += thisBlepSample(t) * magnitude;
-        this->nextSample += nextBlepSample(t) * magnitude;
+        this->thisSample -= thisBlepSample(t) * magnitude;
+        this->nextSample -= nextBlepSample(t) * magnitude;
     }
 
     void insert1stDerivativeDiscontinuity(float t, T magnitude) {
-        this->thisSample += thisIntegratedBlepSample(t) * magnitude;
-        this->nextSample += nextIntegratedBlepSample(t) * magnitude;
+        this->thisSample -= thisIntegratedBlepSample(t) * magnitude;
+        this->nextSample -= nextIntegratedBlepSample(t) * magnitude;
     }
 
-    void registerNextSampleValue(T next) {
-        this->nextSample += next;
-    }
-
-    void step(T *out) {
-        *out = this->thisSample;
-        this->thisSample = this->nextSample;
+    void processSample(const T &next, T &out) {
+        out = this->thisSample;
+        this->thisSample = this->nextSample + next;
         this->nextSample = T(0);
     }
 };

@@ -97,13 +97,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	// dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
-	// PolyBlep<float_4> syncBlep;
 	HighOrderLinearBlep<8, 16, float_4> syncBlep;
-	//dsp::MinBlepGenerator<16, 16, float> squareBlep;
-	HighOrderLinearBlep<8, 16, float> squareBlep;
-	//PolyBlep<float> squareBlep;
 	float lastSyncValue{0.f};
+	float lastFundPhase{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
 
 	// Convenient place to store phases during calculations
@@ -111,6 +107,9 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	std::array<float_4, 16> cosPhaseWithoutSync;
 	std::array<float_4, 16> sinPhaseWithSync;
 	std::array<float_4, 16> cosPhaseWithSync;
+
+	// Handy place to do endianness-independent packing/unpacking of float_4
+	float vecTransfer[4];
 
 	// Discrete switched parameters that aren't interpolated
 	bool splitMode{false};
@@ -183,20 +182,13 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		int iShiftHigh = iShiftLow + 1;
 		float shiftFade = fShift - iShiftLow;
 
-		float_4 fader = {
-			(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
-			(1.f - densityFade) * shiftFade, // low density, high shift
-			densityFade * (1.f - shiftFade), // high density, low shift
-			densityFade * shiftFade // high density, high shift
-		};
-		fader *= lengthFade;
-
-		// Do blending
+		// 4 patterns between which to blend
 		auto lowDensLowShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftLow);
 		auto lowDensHighShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftHigh);
 		auto highDensLowShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftLow);
 		auto highDensHighShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftHigh);
 		auto shiftAmt = AMP_SHIFT;
+		float_4 accum;
 		for (int i = 0; i < numBlocks; i++) {
 			auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & AMP_MASK);
 			auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & AMP_MASK);
@@ -204,10 +196,11 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & AMP_MASK);
 
 			// Wish I could do a matrix multiplication here
-			amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
-			amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
-			amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
-			amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
+			accum = simd::ifelse(lowLow, (1.f - densityFade) * (1.f - shiftFade), 0.f);
+			accum += simd::ifelse(lowHigh, (1.f - densityFade) * shiftFade, 0.f);
+			accum += simd::ifelse(highLow, densityFade * (1.f - shiftFade), 0.f);
+			accum += simd::ifelse(highHigh, densityFade * shiftFade, 0.f);
+			amplitudes[i] += lengthFade * accum;
 
 			shiftAmt -= 4;
 		}
@@ -235,19 +228,22 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 3> &params) override {
 		// Unpack params
-		float length = params[0][0];
-		float density = params[0][1];
-		float shift = params[0][2];
-		float stride = params[0][3];
+		params[0].store(this->vecTransfer);
+		float length = this->vecTransfer[0];
+		float density = this->vecTransfer[1];
+		float shift = this->vecTransfer[2];
+		float stride = this->vecTransfer[3];
 
-		float expCv = params[1][0];
-		float linCv = params[1][1];
-		float sinPhaseOffset = params[1][2];
-		float syncValue = params[1][3];
+		params[1].store(this->vecTransfer);
+		float expCv = this->vecTransfer[0];
+		float linCv = this->vecTransfer[1];
+		float sinPhaseOffset = this->vecTransfer[2];
+		float syncValue = this->vecTransfer[3];
 
-		float pivotHarm = params[2][0];
-		float intensity = params[2][1];
-		float drive = params[2][2];
+		params[2].store(this->vecTransfer);
+		float pivotHarm = this->vecTransfer[0];
+		float intensity = this->vecTransfer[1];
+		float drive = this->vecTransfer[2];
 
 		// Perform any necessary modifications on unpacked parameters
 		length = scaleLength(clamp(length, -2.f, 2.f));
@@ -312,8 +308,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float_4 harmonicFalloffSlope = simd::rcp(-.333333333333f * harmonicMultipleLimit);
 
 		// Calculate fundamental sync for non-free continuous stride
-		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
-		float fundPhaseWrapped = fundAccumBeforeInc + phaseInc;
+		float fundPhaseWrapped = this->lastFundPhase + phaseInc;
 		bool fundSync = fundPhaseWrapped >= 1.f;
 		fundPhaseWrapped -= std::floor(fundPhaseWrapped);
 
@@ -323,15 +318,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float minBlepP = 0.f;
 		if (normalSync) {
 			doSync = true;
-			//minBlepP = syncCrossing - 1.f;
 			minBlepP = 1.f - syncCrossing;
 			syncPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			//minBlepP = -(fundPhaseWrapped / phaseInc);
 			minBlepP = fundPhaseWrapped / phaseInc;
 			syncPhase = fundPhaseWrapped;
 		}
+
+		this->lastFundPhase = syncPhase;
 
 		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
 		// for each output for both synced and unsynced sine and cosine
@@ -427,67 +422,36 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		if (!doSync) {
 			out1WithSyncSum = out1WithoutSyncSum;
 			out2WithSyncSum = out2WithoutSyncSum;
-			sinPhaseWithSync[0] = sinPhaseWithoutSync[0];
-			cosPhaseWithSync[0] = cosPhaseWithoutSync[0];
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
-		float ampScale = (float)this->splitMode + 1.f;
-		float_4 outsWithSync = {sum_float4(out1WithSyncSum), sum_float4(out2WithSyncSum), 0.f, 0.f};
-		float_4 outsWithoutSync = {sum_float4(out1WithoutSyncSum), sum_float4(out2WithoutSyncSum), 0.f, 0.f};
-		outsWithSync *= ampScale;
-		outsWithoutSync *= ampScale;
+		float_4 fundPhases = {fundPhaseWrapped, syncPhase, fundPhaseWrapped + 0.25f, syncPhase + 0.25f};
+		fundPhases -= simd::floor(fundPhases);
+		float_4 fundVals = sin2pi_chebyshev(fundPhases);
+		fundVals.store(this->vecTransfer);
+
+		float_4 outsWithSync = {sum_float4(out1WithSyncSum), sum_float4(out2WithSyncSum), this->vecTransfer[1], 0.f};
+		float_4 outsWithoutSync = {sum_float4(out1WithoutSyncSum), sum_float4(out2WithoutSyncSum), this->vecTransfer[0], 0.f};
 
 		// Oscillator light indicator based on fundamental phase accumulator
-		this->oscLight = this->phaseAccumulators[0][0] > 0.5f;
+		this->oscLight = syncPhase > 0.5f;
 
 		// BLEP
 		if (doSync && this->doBlep) {
-			// Note: the SIMD/Vector implementation in Rack SDK uses _mm_set_ps,
-			// which reverses the order of 
 			float_4 discOrder0 = outsWithSync - outsWithoutSync;
 			float_4 discOrder1 = {
 				sum_float4(out1DerivativeDiscSum),
 				sum_float4(out2DerivativeDiscSum),
-				0.f,
+				this->vecTransfer[3] - this->vecTransfer[2],
 				0.f
 			};
-			// float_4 discOrder2 = -discOrder0;
-			// float_4 discOrder3 = -discOrder1;
-			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1, discOrder2, discOrder3);
+			this->syncBlep.insertDiscontinuities(minBlepP, discOrder0);//, discOrder1);
 		}
 
 		float_4 outsPacked;
 		this->syncBlep.processSample(outsWithSync, outsPacked);
-
-		/*
-		if (this->doBlep) {
-			float squareOutWithoutSync = (sinPhaseWithoutSync[0][0] < 0.5f) ? 1.f : -1.f;
-			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
-			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
-
-			if (fundSync) {
-				// Square step up at 0% phase
-				this->squareBlep.insertDiscontinuities(fundPhaseWrapped / phaseInc, 2.f);
-			}
-			if (squareStepDown) {
-				// Square step down at 50% phase
-				//this->squareBlep2.insertDiscontinuities(squareHalfCrossing - 1.f, -2.f);
-				this->squareBlep.insertDiscontinuities(1.f - squareHalfCrossing, -2.f);
-			}
-			if (normalSync) {
-				// Hard sync step (could be up, could be nothing)
-				this->squareBlep.insertDiscontinuities(minBlepP, squareOutWithSync - squareOutWithoutSync);
-			}
-
-			//mainOutsPacked[3] += this->squareBlep.process();
-			float squareVal;
-			this->squareBlep.processSample(squareOutWithSync, squareVal);
-			outsPacked[3] = squareVal;
-		}
-		*/
-
-		outsPacked *= 0.5f * drive;
+		float ampScale = 0.5f * drive * ((float)this->splitMode + 1.f);
+		outsPacked *= {ampScale, ampScale, 1.f, 0.f};
 		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
 		return std::array<float_4, 1>{5.f * outsPacked};
 	}
@@ -756,13 +720,13 @@ struct Loom : Module {
 		algoInputs[1] = {expCv, linCv, sinPhaseOffset, syncValue}; // Pitch/phase influences
 		algoInputs[2] = {pivotHarm, intensity, drive, 0.f};        // Shaping section
 
-		// Do stuff
-		auto outsPacked = this->algo.process(args, algoInputs)[0];
+		// Run algorithm and output the results
+		float outsPacked[4];
+		this->algo.process(args, algoInputs)[0].store(outsPacked);
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
-		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
-		//outputs[SQUARE_OUTPUT].setVoltage(env);
+		outputs[SQUARE_OUTPUT].setVoltage(env);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
