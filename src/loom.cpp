@@ -386,13 +386,22 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 					float_4 cosAfterSyncPm = (0.25f * multiples) + sinPhaseOffsetAdd;
 					cosAfterSyncPm -= simd::floor(cosAfterSyncPm);
 
-					float_4 sinDiscAtSync = overallAmplitude * (-sin2pi_chebyshev(sinAtSyncPm));
+					// 0th derivative discontinuity is pretty chill
+					float_4 sinVal = sin2pi_chebyshev(sinAtSyncPm);
+					float_4 sinDiscAtSync = overallAmplitude * -sinVal;
 					float_4 cosDiscAtSync = overallAmplitude * (sin2pi_chebyshev(cosAfterSyncPm) - sin2pi_chebyshev(cosAtSyncPm));
-
 					out1DiscSum += simd::ifelse(oddHarmSplitMask[i], sinDiscAtSync, 0.f);
 					out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
-					out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], cosDiscAtSync, 0.f);
-					out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? cosDiscAtSync : -sinDiscAtSync, 0.f);
+
+					// 1st derivative discontinuity is not very chill
+					float_4 sinDerivativeAfterSyncPm = sinAtSyncPm + 0.25f;
+					sinDerivativeAfterSyncPm -= simd::floor(sinDerivativeAfterSyncPm);
+					float_4 sinDerivativeDiscAtSync = overallAmplitude * (1.f - sin2pi_chebyshev(sinDerivativeAfterSyncPm));
+					out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], sinDerivativeDiscAtSync, 0.f);
+					float_4 cosDerivativeAfterSyncPm = cosAtSyncPm + 0.25f;
+					cosDerivativeAfterSyncPm -= simd::floor(cosDerivativeAfterSyncPm);
+					float_4 cosDerivativeDiscAtSync = overallAmplitude * (sin2pi_chebyshev(cosDerivativeAfterSyncPm) + sinVal);
+					out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDerivativeDiscAtSync : cosDerivativeDiscAtSync, 0.f);
 				}
 			} else {
 				this->phaseAccumulators[i] += basePhaseInc;
@@ -876,7 +885,7 @@ struct LoomWidget : ModuleWidget {
 		}
 
 		menu->addChild(new MenuEntry);
-		menu->addChild(createMenuLabel("MinBLEP Anti-Aliasing"));
+		menu->addChild(createMenuLabel("BLEP Anti-Aliasing"));
 
 		struct BlepItem : MenuItem {
 			Loom* module;
