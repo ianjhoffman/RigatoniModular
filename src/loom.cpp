@@ -376,9 +376,20 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 					phaseNow = this->phaseAccumulators[i] + sinPhaseOffsetAdd;
 					phaseNow -= simd::floor(phaseNow);
 
-					// Discontinuity - TODO
-					float_4 phaseAtSyncPm = lastPhase + syncPhaseInc + sinPhaseOffsetAdd;
-					phaseAtSyncPm -= simd::floor(phaseAtSyncPm);
+					// Discontinuity
+					float_4 sinAtSyncPm = lastPhase + syncPhaseInc + sinPhaseOffsetAdd;
+					sinAtSyncPm -= simd::floor(sinAtSyncPm);
+
+					float_4 cosAtSyncPm = sinAtSyncPm + (0.25f * multiples);
+					cosAtSyncPm -= simd::floor(cosAtSyncPm);
+
+					float_4 sinDiscAtSync = overallAmplitude * (-sin2pi_chebyshev(sinAtSyncPm));
+					float_4 cosDiscAtSync = overallAmplitude * (1.f - sin2pi_chebyshev(cosAtSyncPm));
+
+					out1DiscSum += simd::ifelse(oddHarmSplitMask[i], sinDiscAtSync, 0.f);
+					out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
+					out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], cosDiscAtSync, 0.f);
+					out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? cosDiscAtSync : -sinDiscAtSync, 0.f);
 				}
 			} else {
 				this->phaseAccumulators[i] += basePhaseInc;
