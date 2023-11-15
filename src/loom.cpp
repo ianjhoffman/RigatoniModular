@@ -383,8 +383,11 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 					float_4 cosAtSyncPm = sinAtSyncPm + (0.25f * multiples);
 					cosAtSyncPm -= simd::floor(cosAtSyncPm);
 
+					float_4 cosAfterSyncPm = (0.25f * multiples) + sinPhaseOffsetAdd;
+					cosAfterSyncPm -= simd::floor(cosAfterSyncPm);
+
 					float_4 sinDiscAtSync = overallAmplitude * (-sin2pi_chebyshev(sinAtSyncPm));
-					float_4 cosDiscAtSync = overallAmplitude * (1.f - sin2pi_chebyshev(cosAtSyncPm));
+					float_4 cosDiscAtSync = overallAmplitude * (sin2pi_chebyshev(cosAfterSyncPm) - sin2pi_chebyshev(cosAtSyncPm));
 
 					out1DiscSum += simd::ifelse(oddHarmSplitMask[i], sinDiscAtSync, 0.f);
 					out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
