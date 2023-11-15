@@ -417,33 +417,21 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 		// BLEP
 		if (doSync && this->doBlep) {
-			float_4 discOrder0 = {
+			float_4 discOrder0 = (this->doBlep > 0) ? float_4(
 				sum_float4(out1DiscSum),
 				sum_float4(out2DiscSum),
 				this->vecTransfer[1] - this->vecTransfer[0],
 				0.f
-			};
-			float_4 discOrder1 = {
+			) : 0.f;
+			float_4 discOrder1 = (this->doBlep > 1) ? float_4(
 				sum_float4(out1DerivativeDiscSum),
 				sum_float4(out2DerivativeDiscSum),
 				this->vecTransfer[3] - this->vecTransfer[2],
 				0.f
-			};
-			auto discOrder2 = -discOrder0;
-			auto discOrder3 = -discOrder1;
-			switch (this->doBlep) {
-				case 1:
-					this->syncBlep.insertDiscontinuities(blepOffset, discOrder0);
-					break;
-				case 2:
-					this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1);
-					break;
-				case 3:
-					this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1, discOrder2);
-					break;
-				default:
-					this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1, discOrder2, discOrder3);
-			}
+			) : 0.f;
+			auto discOrder2 = (this->doBlep > 2) ? -discOrder0 : 0.f;
+			auto discOrder3 = (this->doBlep > 3) ? -discOrder1 : 0.f;
+			this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1, discOrder2, discOrder3);
 		}
 
 		float_4 outsPacked;
