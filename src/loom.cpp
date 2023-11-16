@@ -398,16 +398,16 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				sincos2pi_chebyshev(out2PhaseAfterSync, out2ValAfterSync, out2DerivativeValAfterSync);
 
 				// 0th derivative discontinuity
-				float_4 sinDiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
-				float_4 cosDiscAtSync = overallAmplitude * (out2ValAfterSync - out2ValAtSync);
-				out1DiscSum += simd::ifelse(oddHarmSplitMask[i], sinDiscAtSync, 0.f);
-				out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
+				float_4 out1DiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
+				float_4 out2DiscAtSync = overallAmplitude * (out2ValAfterSync - out2ValAtSync);
+				out1DiscSum += simd::ifelse(oddHarmSplitMask[i], out1DiscAtSync, 0.f);
+				out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? out1DiscAtSync : out2DiscAtSync, 0.f);
 
 				// 1st derivative discontinuity
-				float_4 sinDerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
-				float_4 cosDerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
-				out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], sinDerivativeDiscAtSync, 0.f);
-				out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDerivativeDiscAtSync : cosDerivativeDiscAtSync, 0.f);
+				float_4 out1DerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
+				float_4 out2DerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
+				out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], out1DerivativeDiscAtSync, 0.f);
+				out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? out1DerivativeDiscAtSync : out2DerivativeDiscAtSync, 0.f);
 			}
 
 			// Actual outputs
