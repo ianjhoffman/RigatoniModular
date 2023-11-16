@@ -401,12 +401,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 					// 1st derivative discontinuity is not very chill
 					float_4 sinDerivativeAtSyncPm = sinAtSyncPm + 0.25f;
 					sinDerivativeAtSyncPm -= simd::floor(sinDerivativeAtSyncPm);
-					float_4 sinDerivativeDiscAtSync = overallAmplitude * (1.f - sin2pi_chebyshev(sinDerivativeAtSyncPm));
+					float_4 sinDerivativeAfterSyncPm = sinPhaseOffsetAdd + 0.25f;
+					sinDerivativeAfterSyncPm -= simd::floor(sinDerivativeAfterSyncPm);
+					float_4 sinDerivativeDiscAtSync = overallAmplitude * (sin2pi_chebyshev(sinDerivativeAfterSyncPm) - sin2pi_chebyshev(sinDerivativeAtSyncPm));
 					out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], sinDerivativeDiscAtSync, 0.f);
-					float_4 cosDerivativeAfterSyncPm = cosAtSyncPm + 0.25f;
-					cosDerivativeAfterSyncPm -= simd::floor(cosDerivativeAfterSyncPm);
-					float_4 cosDerivativeAtSyncPm = cosAtSyncPm + (0.25f * multiples);
+
+					float_4 cosDerivativeAtSyncPm = cosAtSyncPm + 0.25f;
 					cosDerivativeAtSyncPm -= simd::floor(cosDerivativeAtSyncPm);
+					float_4 cosDerivativeAfterSyncPm = cosAfterSyncPm + 0.25f;
+					cosDerivativeAfterSyncPm -= simd::floor(cosDerivativeAfterSyncPm);
 					float_4 cosDerivativeDiscAtSync = overallAmplitude * (sin2pi_chebyshev(cosDerivativeAfterSyncPm) - sin2pi_chebyshev(cosDerivativeAtSyncPm));
 					out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDerivativeDiscAtSync : cosDerivativeDiscAtSync, 0.f);
 				}
