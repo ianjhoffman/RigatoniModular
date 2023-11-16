@@ -30,6 +30,13 @@ T sin2pi_chebyshev(T x) {
     return (x - 1.f) * (x + 1.f) * p1 * x;
 }
 
+template<typename T>
+T sinToCos(T sinPhase, T sinVal) {
+	auto toSqrt = T(1) - (sinVal * sinVal);
+	auto cosRectified = toSqrt * simd::rsqrt(toSqrt);
+	return simd::ifelse((sinPhase - T(0.25f)) <= T(0.5f), -cosRectified, cosRectified);
+}
+
 inline float sum_float4(float_4 x) {
 	return x[0] + x[1] + x[2] + x[3];
 }
