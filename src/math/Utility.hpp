@@ -20,27 +20,26 @@ T sin2pi_chebyshev(T x) {
 	x = (-x * 2.f) + 1.f;
 	auto x2 = x * x;
 
-    // auto p11 = CHEBYSHEV_COEFFS[5];
-    // auto p9 = p11 * x2 + CHEBYSHEV_COEFFS[4];
-	// auto p7 = p9 * x2  + CHEBYSHEV_COEFFS[3];
+	// Perfectly fine without the x^9 or x^11 terms
+	// Error is at most 0.000482 at values 0.0482 from the boundaries 0 and 1
 	auto p7 = CHEBYSHEV_COEFFS[3];
-    auto p5 = p7 * x2  + CHEBYSHEV_COEFFS[2];
-    auto p3 = p5 * x2  + CHEBYSHEV_COEFFS[1];
-    auto p1 = p3 * x2  + CHEBYSHEV_COEFFS[0];
+    auto p5 = p7 * x2 + CHEBYSHEV_COEFFS[2];
+    auto p3 = p5 * x2 + CHEBYSHEV_COEFFS[1];
+    auto p1 = p3 * x2 + CHEBYSHEV_COEFFS[0];
     return (x - 1.f) * (x + 1.f) * p1 * x;
 }
 
 template<typename T>
 void sincos2pi_chebyshev(T x, T &sinOut, T &cosOut) {
 	const T SIN_COEFFS[4] = {
-		T(-3.1415926444234477f),   // x
-		T(2.0261194642649887f),    // x^3
-		T(-0.5240361513980939f),   // x^5
-		T(0.0751872634325299f),    // x^7
+		T(-3.1415926444234477f),  // x
+		T(2.0261194642649887f),   // x^3
+		T(-0.5240361513980939f),  // x^5
+		T(0.0751872634325299f),   // x^7
 	};
 
 	const T COS_COEFFS[4] = {
-		T(-0.318309887112536f),  // overall scale = 1/SIN_COEFFS[0]
+		T(-0.318309887112536f),   // overall scale = 1/SIN_COEFFS[0]
 		T(4.052238928529978f),    // x^2
 		T(-2.096144605592376f),   // x^4
 		T(0.451123580595179f),    // x^6
@@ -50,6 +49,7 @@ void sincos2pi_chebyshev(T x, T &sinOut, T &cosOut) {
 	auto x2 = x * x;
 
 	// Sin
+	// Error is at most 0.000482 at values 0.0482 from the boundaries 0 and 1
 	auto p7 = SIN_COEFFS[3];
     auto p5 = p7 * x2 + SIN_COEFFS[2];
     auto p3 = p5 * x2 + SIN_COEFFS[1];
@@ -58,6 +58,7 @@ void sincos2pi_chebyshev(T x, T &sinOut, T &cosOut) {
 	sinOut = p1 * sinMult;
 
 	// Cos (product rule)
+	// Error is at most 0.004122 at the boundaries 0 and 1
 	auto p6 = COS_COEFFS[3];
 	auto p4 = p6 * x2 + COS_COEFFS[2];
 	auto p2 = p4 * x2 + COS_COEFFS[1];
