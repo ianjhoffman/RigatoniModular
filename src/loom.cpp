@@ -176,6 +176,11 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		int iShiftHigh = iShiftLow + 1;
 		float shiftFade = fShift - iShiftLow;
 
+		float_4 lowLowContrib = (1.f - densityFade) * (1.f - shiftFade);
+		float_4 lowHighContrib = (1.f - densityFade) * shiftFade;
+		float_4 highLowContrib = densityFade * (1.f - shiftFade);
+		float_4 highHighContrib = densityFade * shiftFade;
+
 		// 4 patterns between which to blend
 		auto lowDensLowShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftLow);
 		auto lowDensHighShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftHigh);
@@ -189,11 +194,10 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & AMP_MASK);
 			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & AMP_MASK);
 
-			// Wish I could do a matrix multiplication here
-			accum = simd::ifelse(lowLow, (1.f - densityFade) * (1.f - shiftFade), 0.f);
-			accum += simd::ifelse(lowHigh, (1.f - densityFade) * shiftFade, 0.f);
-			accum += simd::ifelse(highLow, densityFade * (1.f - shiftFade), 0.f);
-			accum += simd::ifelse(highHigh, densityFade * shiftFade, 0.f);
+			accum = simd::ifelse(lowLow, lowLowContrib, 0.f);
+			accum += simd::ifelse(lowHigh, lowHighContrib, 0.f);
+			accum += simd::ifelse(highLow, highLowContrib, 0.f);
+			accum += simd::ifelse(highHigh, highHighContrib, 0.f);
 			amplitudes[i] += lengthFade * accum;
 
 			shiftAmt -= 4;

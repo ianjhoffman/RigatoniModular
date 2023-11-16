@@ -31,6 +31,41 @@ T sin2pi_chebyshev(T x) {
 }
 
 template<typename T>
+void sincos2pi_chebyshev(T x, T &sinOut, T &cosOut) {
+	const T SIN_COEFFS[4] = {
+		T(-3.1415926444234477f),   // x
+		T(2.0261194642649887f),    // x^3
+		T(-0.5240361513980939f),   // x^5
+		T(0.0751872634325299f),    // x^7
+	};
+
+	const T COS_COEFFS[4] = {
+		T(-0.318309887112536f),  // overall scale = 1/SIN_COEFFS[0]
+		T(4.052238928529978f),    // x^2
+		T(-2.096144605592376f),   // x^4
+		T(0.451123580595179f),    // x^6
+	};
+
+	x = (-x * 2.f) + 1.f;
+	auto x2 = x * x;
+
+	// Sin
+	auto p7 = SIN_COEFFS[3];
+    auto p5 = p7 * x2 + SIN_COEFFS[2];
+    auto p3 = p5 * x2 + SIN_COEFFS[1];
+    auto p1 = p3 * x2 + SIN_COEFFS[0];
+	auto sinMult = x2 * x - x; // (x - 1) * (x + 1) * x
+	sinOut = p1 * sinMult;
+
+	// Cos (product rule)
+	auto p6 = COS_COEFFS[3];
+	auto p4 = p6 * x2 + COS_COEFFS[2];
+	auto p2 = p4 * x2 + COS_COEFFS[1];
+	auto deriv = (sinMult * x * p2) + (3.f * x2 - 1.f) * p1;
+	cosOut = COS_COEFFS[0] * deriv;
+}
+
+template<typename T>
 T sinToCos(T sinPhase, T sinVal) {
 	auto toSqrt = T(1) - (sinVal * sinVal);
 	auto cosRectified = toSqrt * simd::rsqrt(toSqrt);
