@@ -390,11 +390,12 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				float_4 out2PhaseAfterSync = quadOffset + phaseOffsets[i];
 				out2PhaseAfterSync -= simd::floor(out2PhaseAfterSync);
 
-				// Store these so we can rotate them by 90° to get the 1st derivative values
-				float_4 out1ValAtSync = sin2pi_chebyshev(out1PhaseAtSync);
-				float_4 out1ValAfterSync = sin2pi_chebyshev(phaseOffsets[i]);
-				float_4 out2ValAtSync = sin2pi_chebyshev(out2PhaseAtSync);
-				float_4 out2ValAfterSync = sin2pi_chebyshev(out2PhaseAfterSync);
+				float_4 out1ValAtSync, out1DerivativeValAtSync, out1ValAfterSync, out1DerivativeValAfterSync;
+				float_4 out2ValAtSync, out2DerivativeValAtSync, out2ValAfterSync, out2DerivativeValAfterSync;
+				sincos2pi_chebyshev(out1PhaseAtSync, out1ValAtSync, out1DerivativeValAtSync);
+				sincos2pi_chebyshev(phaseOffsets[i], out1ValAfterSync, out1DerivativeValAfterSync);
+				sincos2pi_chebyshev(out2PhaseAtSync, out2ValAtSync, out2DerivativeValAtSync);
+				sincos2pi_chebyshev(out2PhaseAfterSync, out2ValAfterSync, out2DerivativeValAfterSync);
 
 				// 0th derivative discontinuity
 				float_4 sinDiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
@@ -403,11 +404,6 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
 
 				// 1st derivative discontinuity
-				float_4 out1DerivativeValAtSync = sinToCos(out1PhaseAtSync, out1ValAtSync);
-				float_4 out1DerivativeValAfterSync = sinToCos(phaseOffsets[i], out1ValAfterSync);
-				float_4 out2DerivativeValAtSync = sinToCos(out2PhaseAtSync, out2ValAtSync);
-				float_4 out2DerivativeValAfterSync = sinToCos(out2PhaseAfterSync, out2ValAfterSync);
-				
 				float_4 sinDerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
 				float_4 cosDerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
 				out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], sinDerivativeDiscAtSync, 0.f);
