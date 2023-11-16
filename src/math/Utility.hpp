@@ -37,8 +37,17 @@ T sinToCos(T sinPhase, T sinVal) {
 	return simd::ifelse((sinPhase - T(0.25f)) <= T(0.5f), -cosRectified, cosRectified);
 }
 
-inline float sum_float4(float_4 x) {
-	return x[0] + x[1] + x[2] + x[3];
+// See: https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
+float sum_float4(const float_4 &x) {
+#ifdef __SSE3__
+	__m128 shuf = _mm_movehdup_ps(x.v);
+#else
+    __m128 shuf = _mm_shuffle_ps(x.v, x.v, _MM_SHUFFLE(2, 3, 0, 1));
+#endif
+    __m128 sums = _mm_add_ps(x.v, shuf);
+    shuf        = _mm_movehl_ps(shuf, sums);
+    sums        = _mm_add_ss(sums, shuf);
+    return _mm_cvtss_f32(sums);
 }
 
 template<int SIZE>

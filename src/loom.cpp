@@ -344,15 +344,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		// us get rid of a bunch of multiplies inside the synthesis loop.
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 basePhaseInc = multiples * phaseInc;
-		float_4 out1SyncPhase = multiples * syncedPhase;
+		float_4 sinSyncPhase = multiples * syncedPhase;
 		float_4 phaseOffset = multiples * sinPhaseOffset;
 		float_4 syncPhaseInc = multiples * phaseAddAtSync;
+		float_4 quadOffset = multiples * 0.25f;
 
-		float_4 phaseIncAdd = phaseInc * 4.f * stride;
-		float_4 syncPhaseAdd = syncedPhase * 4.f * stride;
+		float_4 basePhaseIncAdd = phaseInc * 4.f * stride;
+		float_4 sinSyncPhaseAdd = syncedPhase * 4.f * stride;
 		float_4 phaseOffsetAdd = phaseOffset * 4.f * stride;
-		float_4 multipleAdd = 4.f * stride;
+		float_4 multiplesAdd = 4.f * stride;
 		float_4 syncPhaseIncAdd = phaseAddAtSync * 4.f * stride;
+		float_4 quadOffsetAdd = stride;
 
 		// Update accumulators
 		float_4 phaseNow[16];
@@ -360,16 +362,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float_4 lastPhase[16];
 		for (int i = 0; i < 16; i++) {
 			lastPhase[i] = this->phaseAccumulators[i];
-			this->phaseAccumulators[i] = doSync ? out1SyncPhase : this->phaseAccumulators[i] + basePhaseInc;
+			this->phaseAccumulators[i] = doSync ? sinSyncPhase : this->phaseAccumulators[i] + basePhaseInc;
 			this->phaseAccumulators[i] -= simd::floor(this->phaseAccumulators[i]);
 
 			phaseNow[i] = this->phaseAccumulators[i] + phaseOffset;
 			phaseNow[i] -= simd::floor(phaseNow[i]);
 			phaseOffsets[i] = phaseOffset;
 
-			basePhaseInc += phaseIncAdd;
+			// Update progressive phase multiple calculations
+			basePhaseInc += basePhaseIncAdd;
 			phaseOffset += phaseOffsetAdd;
-			out1SyncPhase += syncPhaseAdd;
+			sinSyncPhase += sinSyncPhaseAdd;
 		}
 
 		for (int i = 0; i < numBlocks; i++) {
@@ -381,50 +384,51 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 			if (doSync) {
 				// Discontinuity
-				float_4 sinAtSyncPm = lastPhase[i] + syncPhaseInc + phaseOffsets[i];
-				sinAtSyncPm -= simd::floor(sinAtSyncPm);
+				float_4 out1PhaseAtSync = lastPhase[i] + syncPhaseInc + phaseOffsets[i];
+				out1PhaseAtSync -= simd::floor(out1PhaseAtSync);
 
-				float_4 cosAtSyncPm = sinAtSyncPm + (0.25f * multiples);
-				cosAtSyncPm -= simd::floor(cosAtSyncPm);
+				float_4 out2PhaseAtSync = out1PhaseAtSync + quadOffset;
+				out2PhaseAtSync -= simd::floor(out2PhaseAtSync);
 
-				float_4 cosAfterSyncPm = (0.25f * multiples) + phaseOffsets[i];
-				cosAfterSyncPm -= simd::floor(cosAfterSyncPm);
+				float_4 out2PhaseAfterSync = quadOffset + phaseOffsets[i];
+				out2PhaseAfterSync -= simd::floor(out2PhaseAfterSync);
 
 				// Store these so we can rotate them by 90° to get the 1st derivative values
-				float_4 sinValAtSync = sin2pi_chebyshev(sinAtSyncPm);
-				float_4 sinValAfterSync = sin2pi_chebyshev(phaseOffsets[i]);
-				float_4 cosValAtSync = sin2pi_chebyshev(cosAtSyncPm);
-				float_4 cosValAfterSync = sin2pi_chebyshev(cosAfterSyncPm);
+				float_4 out1ValAtSync = sin2pi_chebyshev(out1PhaseAtSync);
+				float_4 out1ValAfterSync = sin2pi_chebyshev(phaseOffsets[i]);
+				float_4 out2ValAtSync = sin2pi_chebyshev(out2PhaseAtSync);
+				float_4 out2ValAfterSync = sin2pi_chebyshev(out2PhaseAfterSync);
 
 				// 0th derivative discontinuity
-				float_4 sinDiscAtSync = overallAmplitude * (sinValAfterSync - sinValAtSync);
-				float_4 cosDiscAtSync = overallAmplitude * (cosValAfterSync - cosValAtSync);
+				float_4 sinDiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
+				float_4 cosDiscAtSync = overallAmplitude * (out2ValAfterSync - out2ValAtSync);
 				out1DiscSum += simd::ifelse(oddHarmSplitMask[i], sinDiscAtSync, 0.f);
 				out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDiscAtSync : cosDiscAtSync, 0.f);
 
 				// 1st derivative discontinuity
-				float_4 sinDerivativeValAtSync = sinToCos(sinAtSyncPm, sinValAtSync);
-				float_4 sinDerivativeValAfterSync = sinToCos(phaseOffsets[i], sinValAfterSync);
-				float_4 cosDerivativeValAtSync = sinToCos(cosAtSyncPm, cosValAtSync);
-				float_4 cosDerivativeValAfterSync = sinToCos(cosAfterSyncPm, cosValAfterSync);
+				float_4 out1DerivativeValAtSync = sinToCos(out1PhaseAtSync, out1ValAtSync);
+				float_4 out1DerivativeValAfterSync = sinToCos(phaseOffsets[i], out1ValAfterSync);
+				float_4 out2DerivativeValAtSync = sinToCos(out2PhaseAtSync, out2ValAtSync);
+				float_4 out2DerivativeValAfterSync = sinToCos(out2PhaseAfterSync, out2ValAfterSync);
 				
-				float_4 sinDerivativeDiscAtSync = overallAmplitude * (sinDerivativeValAfterSync - sinDerivativeValAtSync);
-				float_4 cosDerivativeDiscAtSync = overallAmplitude * (cosDerivativeValAfterSync - cosDerivativeValAtSync);
+				float_4 sinDerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
+				float_4 cosDerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
 				out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], sinDerivativeDiscAtSync, 0.f);
 				out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinDerivativeDiscAtSync : cosDerivativeDiscAtSync, 0.f);
 			}
 
 			// Actual outputs
 			float_4 sinNow = overallAmplitude * sin2pi_chebyshev(phaseNow[i]);
-			phaseNow[i] += 0.25f * multiples;
+			phaseNow[i] += quadOffset;
 			phaseNow[i] -= simd::floor(phaseNow[i]);
 			float_4 cosNow = overallAmplitude * sin2pi_chebyshev(phaseNow[i]);
 			out1Sum += simd::ifelse(oddHarmSplitMask[i], sinNow, 0.f);
 			out2Sum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinNow : cosNow, 0.f);
 
 			// Update progressive phase multiple calculations
-			multiples += multipleAdd;
+			multiples += multiplesAdd;
 			syncPhaseInc += syncPhaseIncAdd;
+			quadOffset += quadOffsetAdd;
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
