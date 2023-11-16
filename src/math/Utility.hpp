@@ -34,7 +34,7 @@ template<typename T>
 T sinToCos(T sinPhase, T sinVal) {
 	auto toSqrt = T(1) - (sinVal * sinVal);
 	auto cosRectified = toSqrt * simd::rsqrt(toSqrt);
-	return simd::ifelse((sinPhase - T(0.25f)) <= T(0.5f), -cosRectified, cosRectified);
+	return simd::ifelse((T(0.25) < sinPhase) & (sinPhase < T(0.75)), -cosRectified, cosRectified);
 }
 
 // See: https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction
