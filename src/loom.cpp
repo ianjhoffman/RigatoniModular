@@ -353,7 +353,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		float_4 lastPhase[16];
 		for (int i = 0; i < 16; i++) {
 			lastPhase[i] = this->phaseAccumulators[i];
-			this->phaseAccumulators[i] = doSync ? sinSyncPhase : this->phaseAccumulators[i] + basePhaseInc;
+			this->phaseAccumulators[i] = doSync ? sinSyncPhase : (this->phaseAccumulators[i] + basePhaseInc);
 			this->phaseAccumulators[i] -= simd::floor(this->phaseAccumulators[i]);
 
 			phaseNow[i] = this->phaseAccumulators[i] + phaseOffset;
@@ -378,16 +378,19 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				float_4 out1PhaseAtSync = lastPhase[i] + syncPhaseInc + phaseOffsets[i];
 				out1PhaseAtSync -= simd::floor(out1PhaseAtSync);
 
+				float_4 out1PhaseAfterSync = phaseOffsets[i];
+				out1PhaseAfterSync -= simd::floor(out1PhaseAfterSync);
+
 				float_4 out2PhaseAtSync = out1PhaseAtSync + quadOffset;
 				out2PhaseAtSync -= simd::floor(out2PhaseAtSync);
 
-				float_4 out2PhaseAfterSync = quadOffset + phaseOffsets[i];
+				float_4 out2PhaseAfterSync = out1PhaseAfterSync + quadOffset;
 				out2PhaseAfterSync -= simd::floor(out2PhaseAfterSync);
 
 				float_4 out1ValAtSync, out1DerivativeValAtSync, out1ValAfterSync, out1DerivativeValAfterSync;
 				float_4 out2ValAtSync, out2DerivativeValAtSync, out2ValAfterSync, out2DerivativeValAfterSync;
 				sincos2pi_chebyshev(out1PhaseAtSync, out1ValAtSync, out1DerivativeValAtSync);
-				sincos2pi_chebyshev(phaseOffsets[i], out1ValAfterSync, out1DerivativeValAfterSync);
+				sincos2pi_chebyshev(out1PhaseAfterSync, out1ValAfterSync, out1DerivativeValAfterSync);
 				sincos2pi_chebyshev(out2PhaseAtSync, out2ValAtSync, out2DerivativeValAtSync);
 				sincos2pi_chebyshev(out2PhaseAfterSync, out2ValAfterSync, out2DerivativeValAfterSync);
 
