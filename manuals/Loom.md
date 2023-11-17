@@ -61,7 +61,7 @@ _Fig. 2: Loom's harmonic structure section._
 
 #### Continuous Stride Mode = On
 
-This is a fully free-running mode. Because all partials can phase against each other this mode is good for synthesizing inharmonic bell-like sounds. At **Stride** values near an integer there will be pleasing subtle movement in the output waveform.
+This is a fully free-running mode. Because all partials can phase against each other this mode is good for synthesizing inharmonic bell-like sounds. At **Stride** values near an integer there will be pleasing subtle movement in the output waveform. At high settings of **Drive** (see the [Spectral & Amplitude Shaping Section](#spectral--amplitude-shaping-section)) this movement may clip rhythmically which can be a nice effect.
 
 ### Morphing
 
@@ -73,7 +73,9 @@ While Euclidean patterns are specified by integer values, all 3 of the **Length*
 
 _Fig. 3: Loom's pitch control section._
 
-TODO
+Loom's pitch control section features several standard (and less standard) oscillator features. The **Range** switch _(3)_ switches between LFO range and VCO range. The **Coarse Tune** knob _(1)_ spans from 320 seconds/cycle to 25Hz in LFO mode and from 1.25Hz to 10kHz in VCO mode. The **Fine Tune** knob _(2)_ spans from half frequency to double frequency in LFO mode and from -7 semitones to +7 semitones in VCO mode. The oscillator core indicator LED _(7)_ will flash to show the fundamental frequency of Loom.
+
+The **V/OCT** CV input _(8)_ acts as a 1 volt/octave pitch control. Loom can accept either linear or exponential FM on the **FM** CV input _(10)_ based on the state of the **FM Mode** switch _(4)_. Linear FM can go [through zero](https://learningmodular.com/understanding-the-differences-between-exponential-linear-and-through-zero-fm/). The **FM Amount** attenuverter _(5)_ scales this modulation. Loom also accepts linear phase modulation on the **PM** CV input _(9)_, scaled by the **PM Amount** attenuverter _(6)_.
 
 ## Spectral & Amplitude Shaping Section
 
@@ -89,7 +91,14 @@ TODO
 
 _Fig. 5: Loom's outputs & output configuration section._
 
-TODO
+Loom has 4 outputs:
+
+- **ODD/0°** _(3)_ is the 1st main output of Loom. When **Output Mode** _(2)_ is set to "Odd/Even" it will contain only odd harmonics. In "Quad" (Quadrature) mode it will contain all harmonics (according to the spectral and harmonic shaping settings).
+- **EVEN/90°** _(4)_ is the 2nd main output of Loom. When **Output Mode** _(2)_ is set to "Odd/Even" it will only contain even harmonics along with the fundamental frequency. In "Quad" mode it will be a 90° phase-shifted version of the **ODD/0°** output.
+- **FUND** _(5)_ is the fundamental frequency of the oscillator, a simple sine wave. It's not affected by any of the spectral, amplitude, or harmonic shaping parameters. It still responds to all pitch-related parameters as well as hard sync.
+- **ENV** _(6)_ is a copy of the internally-generated **PING** signal and spans a 0V-8V range.
+
+The **Boost Fundamental** switch _(1)_ will keep the fundamental frequency from being completely silenced even at spectral shaping and/or shift settings where it normally would not be present.
 
 ## Sync & Ping
 
