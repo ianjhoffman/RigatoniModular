@@ -88,11 +88,11 @@ struct HighOrderLinearBlep {
      */
     float interpolateResidual(float *resid, float fracIndex, bool flipAtCenter = false) {
         int idx = fracIndex;
-	    float fade = fracIndex - idx;
+        float fade = fracIndex - idx;
 
         float a = resid[idx];
         float b = ((idx == MID_IDX - 1) && flipAtCenter) ? -resid[idx + 1] : resid[idx + 1];
-	    return a + (b - a) * fade;
+        return a + (b - a) * fade;
     }
 
     /*
@@ -104,15 +104,15 @@ struct HighOrderLinearBlep {
 
         int bufIndex = readPos;
         for (int i = 0; i < BUF_SIZE; i++) {
-			float blepIndex = ((float)i + t) * O;
+            float blepIndex = ((float)i + t) * O;
 
-			buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex, true);
+            buf[bufIndex] += order0 * interpolateResidual(resid0, blepIndex, true);
             buf[bufIndex] += order1 * interpolateResidual(resid1, blepIndex);
             buf[bufIndex] += order2 * interpolateResidual(resid2, blepIndex);
             buf[bufIndex] += order3 * interpolateResidual(resid3, blepIndex);
 
             bufIndex = (bufIndex + 1 == BUF_SIZE) ? 0 : bufIndex + 1;
-		}
+        }
     }
 
     void insertDiscontinuities(float t, const T &order0, const T &order1, const T &order2) {

@@ -48,13 +48,13 @@ struct HardClipDistortionADAA1 : WaveshapingADAA1<T, HardClipDistortionADAA1<T>>
      */
     static T transform(T input) {
         T abs = simd::abs(input);
-		T sign = simd::sgn(input);
+        T sign = simd::sgn(input);
         return simd::ifelse(abs <= T(1), input, sign);
     }
 
     static T transformAD1(T input) {
         T abs = simd::abs(input);
-		T sign = simd::sgn(input);
+        T sign = simd::sgn(input);
         return simd::ifelse(abs <= T(1), input * input * T(0.5), input * sign - T(0.5));
     }
 };
@@ -75,16 +75,16 @@ struct QuadraticDistortionADAA1 : WaveshapingADAA1<T, QuadraticDistortionADAA1<T
      *                                  (x^2)/2  , otherwise
      */
     static T transform(T input) {
-		T abs = simd::abs(input);
-		T sign = simd::sgn(input);
-		T absShifted = abs - 2.f;
+        T abs = simd::abs(input);
+        T sign = simd::sgn(input);
+        T absShifted = abs - 2.f;
         T shaped = simd::ifelse(abs >= T(2), T(1.5) * sign, sign * (T(1.5) - T(0.5) * absShifted * absShifted));
         return simd::ifelse(abs >= T(1), shaped, input);
     }
 
     static T transformAD1(T input) {
         T abs = simd::abs(input);
-		T sign = simd::sgn(input);
+        T sign = simd::sgn(input);
         T input2 = input * input;
         T input3 = input2 * input;
         T shaped = simd::ifelse(
