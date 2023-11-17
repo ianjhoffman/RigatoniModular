@@ -292,10 +292,6 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		this->lastSyncValue = syncValue;
 		bool normalSync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncValue >= 0.f);
 
-		// Calculate phase modulation offsets
-		float cosPhaseOffset = sinPhaseOffset + 0.25f;
-		cosPhaseOffset -= std::floor(cosPhaseOffset);
-
 		// Additive synthesis params setup
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
@@ -478,7 +474,7 @@ struct Loom : Module {
 		HARM_SHIFT_ATTENUVERTER_PARAM,
 		SPECTRAL_PIVOT_KNOB_PARAM,
 		SPECTRAL_INTENSITY_KNOB_PARAM,
-		SPECTRAL_INTENSITY_ATTENUVERTER_PARAM,
+		SPECTRAL_PIVOT_ATTENUVERTER_PARAM,
 		SPECTRAL_TILT_SWITCH_PARAM,
 		DRIVE_KNOB_PARAM,
 		DRIVE_ATTENUVERTER_PARAM,
@@ -584,7 +580,7 @@ struct Loom : Module {
 		configParam(HARM_DENSITY_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Density CV Attenuverter");
 		configParam(HARM_STRIDE_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Stride CV Attenuverter");
 		configParam(HARM_SHIFT_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Shift CV Attenuverter");
-		configParam(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity CV Attenuverter");
+		configParam(SPECTRAL_PIVOT_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity CV Attenuverter");
 		configParam(DRIVE_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Drive CV Attenuverter");
 		configParam(PM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Phase Modulation CV Attenuverter");
 		configParam(FM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "FM CV Attenuverter");
@@ -594,7 +590,7 @@ struct Loom : Module {
 		getParamQuantity(HARM_DENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(HARM_STRIDE_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(HARM_SHIFT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
-		getParamQuantity(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(SPECTRAL_PIVOT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(PM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(FM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 
@@ -706,10 +702,10 @@ struct Loom : Module {
 		float expCv = coarse + fine + pitchCv + (expFm ? fmCv : 0.f);
 		float linCv = expFm ? 0.f : fmCv * LIN_FM_FACTOR;
 
-		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue();
-		pivotHarm += 0.4f * inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage();
+		float pivotCv = params[SPECTRAL_PIVOT_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_PIVOT_CV_INPUT].getNormalVoltage(env);
+		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + pivotCv;
 
-		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getNormalVoltage(env);
+		float intensityCv = .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv;
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getNormalVoltage(env);
@@ -767,17 +763,17 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 45.34)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 62.86)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 81.46)), module, Loom::HARM_STRIDE_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 61.879)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 81.428)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.881, 61.603)), module, Loom::DRIVE_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 82.005)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 60.544)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.881, 60.544)), module, Loom::DRIVE_KNOB_PARAM));
 
 		// Trimpots
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(56.382, 19.028)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 41.959)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 57.502)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 73.843)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 82.006)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 61.698)), module, Loom::DRIVE_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 82.006)), module, Loom::SPECTRAL_PIVOT_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 60.640)), module, Loom::DRIVE_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.073, 41.867)), module, Loom::PM_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(39.881, 41.867)), module, Loom::FM_ATTENUVERTER_PARAM));
 
@@ -816,14 +812,14 @@ struct LoomWidget : ModuleWidget {
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(75.410, 74.791)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(4.233, 73.4)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(8.313, 73.4)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.393, 73.4)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.473, 73.4)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.553, 73.4)), module, Loom::S_LED_5_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 73.4)), module, Loom::S_LED_6_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 73.4)), module, Loom::S_LED_7_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 73.4)), module, Loom::S_LED_8_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(4.233, 72.871)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(8.313, 72.871)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.393, 72.871)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.473, 72.871)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.553, 72.871)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 72.871)), module, Loom::S_LED_6_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 72.871)), module, Loom::S_LED_7_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 72.871)), module, Loom::S_LED_8_LIGHT));
 	}
 
 	void appendContextMenu(Menu* menu) override {

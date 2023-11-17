@@ -10,7 +10,7 @@
 
 ## Video Demo
 
-TODO
+Coming soon!
 
 ## Overview
 
@@ -93,7 +93,7 @@ TODO
 
 ## Sync & Ping
 
-TODO
+Loom has a hard **SYNC** input that allows its phase to be reset every time the signal at this input rises above 0V. Loom also features a "Ping" input. Patching a short trigger to this input will produce a short, plucky envelope at the **ENV** output. Even better, this envelope is normalled to any unpatched CV inputs with a dedicated attenuverter (**PM**, **FM**, **COUNT**, **DENSITY**, **SHIFT**, **STRIDE**, **DRIVE**, **S PIVOT**). Feel free to mult the **ENV** output to any other inputs too! **PING** will also respond to non-trigger signals so feel free to experiment.
 
 ## Right-Click Settings
 
@@ -102,3 +102,7 @@ TODO
 ## Questions/feedback?
 
 Please open an issue on this GitHub repository with unanswered questions or feedback!
+
+## References
+
+TODO
