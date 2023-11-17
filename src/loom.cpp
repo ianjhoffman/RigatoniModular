@@ -176,10 +176,10 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		int iShiftHigh = iShiftLow + 1;
 		float shiftFade = fShift - iShiftLow;
 
-		float_4 lowLowContrib = (1.f - densityFade) * (1.f - shiftFade);
-		float_4 lowHighContrib = (1.f - densityFade) * shiftFade;
-		float_4 highLowContrib = densityFade * (1.f - shiftFade);
-		float_4 highHighContrib = densityFade * shiftFade;
+		auto lowLowContrib = float_4(lengthFade * (1.f - densityFade) * (1.f - shiftFade));
+		auto lowHighContrib = float_4(lengthFade * (1.f - densityFade) * shiftFade);
+		auto highLowContrib = float_4(lengthFade * densityFade * (1.f - shiftFade));
+		auto highHighContrib = float_4(lengthFade * densityFade * shiftFade);
 
 		// 4 patterns between which to blend
 		auto lowDensLowShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftLow);
@@ -187,16 +187,13 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		auto highDensLowShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftLow);
 		auto highDensHighShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftHigh);
 		auto shiftAmt = AMP_SHIFT;
-		float_4 accum;
 		for (int i = 0; i < numBlocks; i++) {
 			auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & AMP_MASK);
 			auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & AMP_MASK);
 			auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & AMP_MASK);
 			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & AMP_MASK);
-
-			accum = (lowLow & lowLowContrib) + (lowHigh & lowHighContrib);
-			accum += (highLow & highLowContrib) + (highHigh & highHighContrib);
-			amplitudes[i] += lengthFade * accum;
+			amplitudes[i] += (lowLow & lowLowContrib) + (lowHigh & lowHighContrib)
+						   + (highLow & highLowContrib) + (highHigh & highHighContrib);
 
 			shiftAmt -= 4;
 		}
