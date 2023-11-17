@@ -32,92 +32,48 @@ struct HighOrderLinearBlep {
         }
 
         // Calculate 0th order blep, starting by filling table with sinc
+        double calcSinc[TABLE_SIZE];
         double calcResid[TABLE_SIZE];
-        double calcResid2[TABLE_SIZE];
-        calcResid2[MID_IDX] = 1;
+        calcSinc[MID_IDX] = 1;
         for (int i = 1; i <= MID_IDX; i++) {
             double piX = piXTab[MID_IDX + i];
             double sincVal = std::sin(piX) / piX;
 
             // Sinc is symmetrical so put this on both sides of 0
-            calcResid2[MID_IDX + i] = sincVal;
-            calcResid2[MID_IDX - i] = sincVal;
+            calcSinc[MID_IDX + i] = sincVal;
+            calcSinc[MID_IDX - i] = sincVal;
         }
 
-        // Integrate sinc
+        // Integrate sinc to get Si(x)
         calcResid[MID_IDX] = 0;
         for (int i = 1; i <= MID_IDX; i++) {
             int j = MID_IDX + i;
-            double slice = trapezoid(X_SCALE, calcResid2[j - 1], calcResid2[j]);
+            double slice = trapezoid(X_SCALE, calcSinc[j - 1], calcSinc[j]);
             double integral = calcResid[j - 1] + slice;
             calcResid[j] = integral;
             calcResid[MID_IDX - i] = -integral; // invert for x < 0
         }
 
-        // Normalize, subtract trivial step to get ∆h_0
-        double norm = 1.0 / (calcResid[TABLE_SIZE - 1] - calcResid[0]);
+        // Calculate all 4 residuals
         for (int i = 0; i < TABLE_SIZE; i++) {
             double piX = piXTab[i];
-            calcResid[i] = calcResid[i] * norm + ((i >= MID_IDX) ? -0.5 : 0.5);
-            resid0[i] = /* blackmanWindow(piX) */ calcResid[i];
-        }
+            double blackmanMult = blackmanWindow(piX);
 
-        for (int i = 0; i < TABLE_SIZE; i++) {
-            DEBUG("%f, %f", piXTab[i], calcResid[i]);
-        }
+            // Subtract trivial step from sine integral to get ∆h_0
+            calcResid[i] = calcResid[i] + ((i >= MID_IDX) ? -0.5 : 0.5);
+            resid0[i] = blackmanMult * calcResid[i];
 
-        // Integrate ∆h_0 to get ∆h_1
-        calcResid2[0] = 0;
-        for (int i = 1; i < MID_IDX; ++i) {
-            double piX = piXTab[i];
-            double slice = trapezoid(X_SCALE, calcResid[i - 1], calcResid[i]);
-            double integral = calcResid2[i - 1] + slice;
-            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
+            // Calculate ∆h_1 from ∆h_0
+            calcResid[i] = piX * calcResid[i] + M_1_PI * std::cos(piX);
+            resid1[i] = blackmanMult * calcResid[i];
 
-            calcResid2[i] = integral;
-            calcResid2[TABLE_SIZE - i] = integral;
+            // Calculate ∆h_2 from ∆h_1
+            calcResid[i] = (piX * calcResid[i] + M_1_PI * std::sin(piX)) * 0.5;
+            resid2[i] = blackmanMult * calcResid[i];
 
-            resid1[i] = blackmanIntegral;
-            resid1[TABLE_SIZE - i] = blackmanIntegral;
-        }
-
-        // Integrate ∆h_1 to get ∆h_2
-        calcResid[0] = 0;
-        calcResid[TABLE_SIZE - 1] = 0;
-        for (int i = 1; i <= MID_IDX; i++) {
-            double piX = piXTab[i];
-            double slice = trapezoid(X_SCALE, calcResid2[i - 1], calcResid2[i]);
-            double integral = calcResid[i - 1] + slice;
-            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
-
-            calcResid[i] = integral;
-            calcResid[(TABLE_SIZE - 1) - i] = -integral; // invert for x > 0
-
-            resid2[i] = blackmanIntegral;
-            resid2[(TABLE_SIZE - 1) - i] = -blackmanIntegral; // invert for x > 0
-        }
-
-        // Integrate ∆h_2 to get ∆h_3
-        calcResid2[0] = 0;
-        calcResid2[TABLE_SIZE - 1] = 0;
-        for (int i = 1; i <= MID_IDX; i++) {
-            double piX = piXTab[i];
-            double slice = trapezoid(X_SCALE, calcResid[i - 1], calcResid[i]);
-            double integral = calcResid2[i - 1] + slice;
-            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
-
-            calcResid2[i] = integral;
-            calcResid2[(TABLE_SIZE - 1) - i] = integral;
-
-            resid3[i] = blackmanIntegral;
-            resid3[(TABLE_SIZE - 1) - i] = blackmanIntegral;
-        }
-
-        for (int i = 0; i < TABLE_SIZE; i++) {
-            // DEBUG(
-            //     "%f, %f, %f, %f, %f",
-            //     piXTab[i], resid0[i], resid1[i], resid2[i], resid3[i]
-            // );
+            // Calculate ∆h_3 from ∆h_2
+            calcResid[i] = (piX * calcResid[i] - M_1_PI * std::cos(piX)) * 0.3333333333333333;
+            resid3[i] = blackmanMult * calcResid[i];
         }
     }
 

@@ -97,7 +97,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	HighOrderLinearBlep<16, 128, float_4> syncBlep;
+	HighOrderLinearBlep<16, 32, float_4> syncBlep;
 	float lastSyncValue{0.f};
 	float lastFundPhase{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
