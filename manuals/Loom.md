@@ -83,7 +83,13 @@ The **V/OCT** CV input _(8)_ acts as a 1 volt/octave pitch control. Loom can acc
 
 _Fig. 4: Loom's spectral & amplitude shaping section._
 
-TODO
+Loom's spectral & amplitude shaping section consists of two main elements: a spectral filter and a drive amplifier/waveshaper.
+
+The spectral filter's cutoff frequency (pivot point) can be centered around any of the 64 partials using the **Pivot Point** knob _(3)_, which has the same knob scaling as **Count**. The spectral pivot can be modulated using the **S Pivot** CV input _(2)_, this modulation being scaled by an attenuverter _(8)_. The slope of the spectral filter is controlled by **Intensity** _(1)_ and its corresponding CV input _(4)_. At `0` the slope will be flat (no shaping) and at `MAX` the slope will be very steep. The spectral filter's mode can be switched between `Lowpass`, `Bandpass`, and `Highpass` using the **Shaping Mode** switch _(9)_. Notably, all spectral shaping happens before drive or hard sync, so interesting effects can be achieved by combining these features.
+
+The drive amplifier/waveshaper has its gain controlled by the **Drive** knob _(5)_, its associated CV input _(6)_, and its attenuverter _(7)_. This setting only applies to the 2 main outputs. Depending on other panel settings you may need more or less drive to achieve a 10Vpp output signal; **Loom has no automatic gain compensation to make it a more expressive voice**. At higher values of **Drive** the 2 main outputs will start to clip through a quadratic soft clipping stage.
+
+This section also features an LED array _(10)_ indicating the amplitudes of all partials. Each LED represents a group of 8 partials. Their brightnesses are affected by the harmonic shaping section, the spectral filter, and any band-limiting effects which cull harmonics over the [Nyquist frequency](https://en.wikipedia.org/wiki/Nyquist_frequency) (with a smooth falloff starting at 0.75x Nyquist).
 
 ## Outputs & Output Configuration Section
 
