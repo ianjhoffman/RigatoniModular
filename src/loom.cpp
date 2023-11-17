@@ -69,7 +69,7 @@ void shapeAmplitudes(
 	for (int i = 0; i < numBlocks; i++) {
 		float_4 slopes = simd::ifelse(pivotDiffs > 0, belowSlope, aboveSlope);
 		auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & AMP_MASK);
-		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * pivotDiffs, 0.f);
+		auto toAdd = addMask & (pivotBase + slopes * pivotDiffs);
 		amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 
 		pivotDiffs -= 4.f;
@@ -97,7 +97,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	HighOrderLinearBlep<8, 16, float_4> syncBlep;
+	HighOrderLinearBlep<16, 128, float_4> syncBlep;
 	float lastSyncValue{0.f};
 	float lastFundPhase{0.f};
 	float freqMultiplier{VCO_MULTIPLIER};
@@ -127,8 +127,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		this->phaseAccumulators.fill(0.f);		
 	}
 
-	// Gets the Euclidean pattern with the supplied parameters, masked and with
-	// each nibble flipped for simd::ifelse (which expects the opposite order)
+	// Gets the Euclidean pattern with the supplied parameters, masked and with each
+	// nibble flipped for simd::movemaskInverse (which expects the opposite order)
 	inline uint64_t getPattern(uint64_t mask, uint8_t length, uint8_t density, uint8_t shift) {
 		return flipNibbleEndian(mask & this->patternGenerator.getShiftedPattern(length, density, shift));
 	}
@@ -194,10 +194,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & AMP_MASK);
 			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & AMP_MASK);
 
-			accum = simd::ifelse(lowLow, lowLowContrib, 0.f);
-			accum += simd::ifelse(lowHigh, lowHighContrib, 0.f);
-			accum += simd::ifelse(highLow, highLowContrib, 0.f);
-			accum += simd::ifelse(highHigh, highHighContrib, 0.f);
+			accum = (lowLow & lowLowContrib) + (lowHigh & lowHighContrib);
+			accum += (highLow & highLowContrib) + (highHigh & highHighContrib);
 			amplitudes[i] += lengthFade * accum;
 
 			shiftAmt -= 4;
@@ -400,14 +398,14 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 				// 0th derivative discontinuity
 				float_4 out1DiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
 				float_4 out2DiscAtSync = overallAmplitude * (out2ValAfterSync - out2ValAtSync);
-				out1DiscSum += simd::ifelse(oddHarmSplitMask[i], out1DiscAtSync, 0.f);
-				out2DiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? out1DiscAtSync : out2DiscAtSync, 0.f);
+				out1DiscSum += oddHarmSplitMask[i] & out1DiscAtSync;
+				out2DiscSum += evenHarmSplitMask[i] & (this->splitMode ? out1DiscAtSync : out2DiscAtSync);
 
 				// 1st derivative discontinuity
 				float_4 out1DerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
 				float_4 out2DerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
-				out1DerivativeDiscSum += simd::ifelse(oddHarmSplitMask[i], out1DerivativeDiscAtSync, 0.f);
-				out2DerivativeDiscSum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? out1DerivativeDiscAtSync : out2DerivativeDiscAtSync, 0.f);
+				out1DerivativeDiscSum += oddHarmSplitMask[i] & out1DerivativeDiscAtSync;
+				out2DerivativeDiscSum += evenHarmSplitMask[i] & (this->splitMode ? out1DerivativeDiscAtSync : out2DerivativeDiscAtSync);
 			}
 
 			// Actual outputs
@@ -415,8 +413,8 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 			phaseNow[i] += quadOffset;
 			phaseNow[i] -= simd::floor(phaseNow[i]);
 			float_4 cosNow = overallAmplitude * sin2pi_chebyshev(phaseNow[i]);
-			out1Sum += simd::ifelse(oddHarmSplitMask[i], sinNow, 0.f);
-			out2Sum += simd::ifelse(evenHarmSplitMask[i], this->splitMode ? sinNow : cosNow, 0.f);
+			out1Sum += oddHarmSplitMask[i] & sinNow;
+			out2Sum += evenHarmSplitMask[i] & (this->splitMode ? sinNow : cosNow);
 
 			// Update progressive phase multiple calculations
 			multiples += multiplesAdd;

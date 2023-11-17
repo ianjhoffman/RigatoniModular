@@ -21,53 +21,103 @@ struct HighOrderLinearBlep {
         return 0.58 + 0.5 * std::cos(2.0 * piX / Z) - 0.08 * std::cos(4.0 * piX / Z);
     }
 
+    inline static double trapezoid(double width, double h1, double h2) {
+        return width * 0.5 * (h1 + h2);
+    }
+
     inline void populateResiduals() {
+        double piXTab[TABLE_SIZE];
+        for (int i = 0; i < TABLE_SIZE; i++) {
+            piXTab[i] = (M_PI * (double)(i - MID_IDX)) * X_SCALE;
+        }
+
         // Calculate 0th order blep, starting by filling table with sinc
         double calcResid[TABLE_SIZE];
-        calcResid[MID_IDX] = 1;
+        double calcResid2[TABLE_SIZE];
+        calcResid2[MID_IDX] = 1;
         for (int i = 1; i <= MID_IDX; i++) {
-            double piX = M_PI * (double)i * X_SCALE;
-            double windowedSincVal = blackmanWindow(piX) * std::sin(piX) / piX;
+            double piX = piXTab[MID_IDX + i];
+            double sincVal = std::sin(piX) / piX;
 
             // Sinc is symmetrical so put this on both sides of 0
-            calcResid[MID_IDX + i] = windowedSincVal;
-            calcResid[MID_IDX - i] = windowedSincVal;
+            calcResid2[MID_IDX + i] = sincVal;
+            calcResid2[MID_IDX - i] = sincVal;
         }
 
         // Integrate sinc
         calcResid[MID_IDX] = 0;
         for (int i = 1; i <= MID_IDX; i++) {
-            double integral = calcResid[MID_IDX + i - 1] + calcResid[MID_IDX + i] * X_SCALE;
-            calcResid[MID_IDX + i] = integral;
-            calcResid[MID_IDX - i] = -integral;
+            int j = MID_IDX + i;
+            double slice = trapezoid(X_SCALE, calcResid2[j - 1], calcResid2[j]);
+            double integral = calcResid[j - 1] + slice;
+            calcResid[j] = integral;
+            calcResid[MID_IDX - i] = -integral; // invert for x < 0
         }
 
         // Normalize, subtract trivial step to get ∆h_0
         double norm = 1.0 / (calcResid[TABLE_SIZE - 1] - calcResid[0]);
         for (int i = 0; i < TABLE_SIZE; i++) {
+            double piX = piXTab[i];
             calcResid[i] = calcResid[i] * norm + ((i >= MID_IDX) ? -0.5 : 0.5);
-            resid0[i] = calcResid[i];
+            resid0[i] = /* blackmanWindow(piX) */ calcResid[i];
         }
 
-        // Calculate ∆h_1, ∆h_2, ∆h_3 based on ∆h_0
-        constexpr double oneThird = (double)1 / (double)3;
         for (int i = 0; i < TABLE_SIZE; i++) {
-            double piX = (M_PI * (double)(i - MID_IDX)) * X_SCALE;
+            DEBUG("%f, %f", piXTab[i], calcResid[i]);
+        }
 
-            // ∆h_1
-            calcResid[i] = piX * calcResid[i] + M_1_PI * std::cos(piX);
-            calcResid[i] *= blackmanWindow(piX);
-            resid1[i] = calcResid[i];
+        // Integrate ∆h_0 to get ∆h_1
+        calcResid2[0] = 0;
+        for (int i = 1; i < MID_IDX; ++i) {
+            double piX = piXTab[i];
+            double slice = trapezoid(X_SCALE, calcResid[i - 1], calcResid[i]);
+            double integral = calcResid2[i - 1] + slice;
+            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
 
-            // ∆h_2
-            calcResid[i] = 0.5 * (piX * calcResid[i] + M_1_PI * std::sin(piX));
-            calcResid[i] *= blackmanWindow(piX);
-            resid2[i] = calcResid[i];
+            calcResid2[i] = integral;
+            calcResid2[TABLE_SIZE - i] = integral;
 
-            // ∆h_3
-            calcResid[i] = oneThird * (piX * calcResid[i] - M_1_PI * std::cos(piX));
-            calcResid[i] *= blackmanWindow(piX);
-            resid3[i] = calcResid[i];
+            resid1[i] = blackmanIntegral;
+            resid1[TABLE_SIZE - i] = blackmanIntegral;
+        }
+
+        // Integrate ∆h_1 to get ∆h_2
+        calcResid[0] = 0;
+        calcResid[TABLE_SIZE - 1] = 0;
+        for (int i = 1; i <= MID_IDX; i++) {
+            double piX = piXTab[i];
+            double slice = trapezoid(X_SCALE, calcResid2[i - 1], calcResid2[i]);
+            double integral = calcResid[i - 1] + slice;
+            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
+
+            calcResid[i] = integral;
+            calcResid[(TABLE_SIZE - 1) - i] = -integral; // invert for x > 0
+
+            resid2[i] = blackmanIntegral;
+            resid2[(TABLE_SIZE - 1) - i] = -blackmanIntegral; // invert for x > 0
+        }
+
+        // Integrate ∆h_2 to get ∆h_3
+        calcResid2[0] = 0;
+        calcResid2[TABLE_SIZE - 1] = 0;
+        for (int i = 1; i <= MID_IDX; i++) {
+            double piX = piXTab[i];
+            double slice = trapezoid(X_SCALE, calcResid[i - 1], calcResid[i]);
+            double integral = calcResid2[i - 1] + slice;
+            double blackmanIntegral = /* blackmanWindow(piX) */ integral;
+
+            calcResid2[i] = integral;
+            calcResid2[(TABLE_SIZE - 1) - i] = integral;
+
+            resid3[i] = blackmanIntegral;
+            resid3[(TABLE_SIZE - 1) - i] = blackmanIntegral;
+        }
+
+        for (int i = 0; i < TABLE_SIZE; i++) {
+            // DEBUG(
+            //     "%f, %f, %f, %f, %f",
+            //     piXTab[i], resid0[i], resid1[i], resid2[i], resid3[i]
+            // );
         }
     }
 
