@@ -25,7 +25,7 @@ _Fig. 1: The waveform (left) and spectrum (right) of the additive waveform based
 
 The harmonic structure section of Loom is where the core of its additive synthesis based on Euclidean patterns occurs.
 
-<img src="./img/loom/LoomHarmonicShapingSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+<img src="./img/loom/LoomHarmonicShapingSection.png" alt="Loom's harmonic shaping section" width="250"/>
 
 _Fig. 2: Loom's harmonic structure section._
 
@@ -69,7 +69,7 @@ While Euclidean patterns are specified by integer values, all 3 of the **Length*
 
 ## Pitch Control Section
 
-<img src="./img/loom/LoomPitchControlSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+<img src="./img/loom/LoomPitchControlSection.png" alt="Loom's pitch control section" width="250"/>
 
 _Fig. 3: Loom's pitch control section._
 
@@ -77,7 +77,7 @@ TODO
 
 ## Spectral & Amplitude Shaping Section
 
-<img src="./img/loom/LoomSpectralAmplitudeShapingSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+<img src="./img/loom/LoomSpectralAmplitudeShapingSection.png" alt="Loom's spectral & amplitude shaping section" width="250"/>
 
 _Fig. 4: Loom's spectral & amplitude shaping section._
 
@@ -85,13 +85,17 @@ TODO
 
 ## Outputs & Output Configuration Section
 
-<img src="./img/loom/LoomOutputSection.png" alt="Spectrum for length = 11, density = 7" width="250"/>
+<img src="./img/loom/LoomOutputSection.png" alt="Loom's outputs & output configuration section" width="250"/>
 
 _Fig. 5: Loom's outputs & output configuration section._
 
 TODO
 
 ## Sync & Ping
+
+TODO
+
+## Right-Click Settings
 
 TODO
 
