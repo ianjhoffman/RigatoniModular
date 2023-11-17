@@ -53,7 +53,7 @@ void shapeAmplitudes(
 	float pivotHarm,
 	float intensity
 ) {
-	constexpr float SLOPE_SCALE = 0.01f;
+	constexpr float SLOPE_SCALE = 0.005f;
 	constexpr float SLOPES[3][2] = {
 		{                0.f, 10.f * SLOPE_SCALE},
 		{-15.f * SLOPE_SCALE, 15.f * SLOPE_SCALE},
@@ -715,7 +715,10 @@ struct Loom : Module {
 		float drive = params[DRIVE_KNOB_PARAM].getValue() + driveCv;
 
 		float syncValue = inputs[SYNC_INPUT].getVoltage();
-		float sinPhaseOffset = params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getNormalVoltage(env);
+
+		// Quadratic scaling on PM attenuverter to allow more precise dialing in of small amounts of PM
+		float pmAttenValue = params[PM_ATTENUVERTER_PARAM].getValue();
+		float sinPhaseOffset = pmAttenValue * std::abs(pmAttenValue) * .1f * inputs[PM_CV_INPUT].getNormalVoltage(env);
 
 		// Pack algorithm inputs
 		std::array<float_4, 3> algoInputs;
