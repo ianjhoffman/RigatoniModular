@@ -97,7 +97,19 @@ Loom has a hard **SYNC** input that allows its phase to be reset every time the 
 
 ## Right-Click Settings
 
-TODO
+Loom has a few right-click settings that modify the quality of its synthesis algorithms. We recommend default settings for these parameters for performance reasons but they can be modified for even higher quality synthesis or grittier sounds.
+
+### Oversampling
+
+Oversampling defaults to **Off** and controls whether or not Loom's synthesis will be calculated at a higher sample rate than VCV Rack's configured sample rate. Given that Loom already does a lot of computation to produce its outputs we recommend keeping it turned off for performance reasons. If you're using Loom with very heavy audio-rate modulation and find that you're experiencing an unacceptable amount of aliasing consider switching it to **2x**.
+
+### Drive ADAA
+
+This option controls whether or not Loom's non-linear drive emulation has antiderivative anti-aliasing applied. This only incurs a small performance hit so it's enabled by default. If you want a more gritty digital aliased sound you can disable it and crank up the drive.
+
+### BLEP Anti-Aliasing
+
+This option controls how many derivatives of "band-limited step anti-aliasing" are applied to Loom's outputs under hard sync or in synced continuous stride mode. There's practically no performance hit between any of the settings between **0th Order** and **3rd Order** so for best quality we recommend a default of **3rd Order**. For grittier digital aliased sounds with sync you can disable this setting.
 
 ## Questions/feedback?
 
@@ -105,4 +117,7 @@ Please open an issue on this GitHub repository with unanswered questions or feed
 
 ## References
 
-TODO
+- [Antiderivative Anti-Aliasing](https://ccrma.stanford.edu/~jatin/Notebooks/adaa.html)
+- [Sine Sync](https://www.native-instruments.com/fileadmin/ni_media/downloads/pdf/SineSync.pdf)
+- [Euclidean Rhythms](https://medium.com/code-music-noise/euclidean-rhythms-391d879494df)
+- [Sine Chebyshev Polynomial Approximation](https://web.archive.org/web/20200628195036/http://mooooo.ooo/chebyshev-sine-approximation/)
