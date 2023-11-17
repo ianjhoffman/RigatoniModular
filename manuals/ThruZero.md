@@ -18,7 +18,20 @@ The default "ENJ" flavor uses a ramp phase shifter, which produces a spike in th
 
 Patch an audio or CV signal into the CV input. The threshold knob acts as the base comparator threshold and the threshold CV input acts as an offset for the threshold. Use the `FWD?` output as the comparator output (0V low, 10V high).
 
-### TODO - X Without Y Patches
+## X Without Y Patches (Included with Permission from Radiokoala)
+
+### Basic "TZFM with Any VCO" Patch
+
+- Waveform into ramp input
+- FM modulator into CV input
+- Set threshold to control comparator "zero" point
+- Output = ramp output
+
+### Square/Pulse "TZFM" Modulator With Ring Mod (Not Using ThruZero)
+
+- Square/PWM FM modulator into ring modulator CV in
+- Carrier waveform into ring modulator input
+- Output = ring modulator output
 
 ## Demo
 
