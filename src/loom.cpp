@@ -118,7 +118,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 
 	// Additional configurable parameters for anti-aliasing
 	bool doADAA{true};
-	int doBlep{1};
+	int blepLevel{3};
 
 	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4>(ParameterInterpolator<3, float_4>()) {
 		// Set up everything pre-cached/pre-allocated
@@ -434,21 +434,21 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		this->oscLight = syncedPhase > 0.5f;
 
 		// BLEP
-		if (doSync && this->doBlep) {
-			float_4 discOrder0 = (this->doBlep > 0) ? float_4(
+		if (doSync && this->blepLevel) {
+			float_4 discOrder0 = float_4(
 				sum_float4(out1DiscSum),
 				sum_float4(out2DiscSum),
 				this->vecTransfer[1] - this->vecTransfer[0],
 				0.f
-			) : 0.f;
-			float_4 discOrder1 = (this->doBlep > 1) ? float_4(
+			);
+			float_4 discOrder1 = (this->blepLevel > 1) ? float_4(
 				sum_float4(out1DerivativeDiscSum),
 				sum_float4(out2DerivativeDiscSum),
 				this->vecTransfer[3] - this->vecTransfer[2],
 				0.f
 			) : 0.f;
-			auto discOrder2 = (this->doBlep > 2) ? -discOrder0 : 0.f;
-			auto discOrder3 = (this->doBlep > 3) ? -discOrder1 : 0.f;
+			auto discOrder2 = (this->blepLevel > 2) ? -discOrder0 : 0.f;
+			auto discOrder3 = (this->blepLevel > 3) ? -discOrder1 : 0.f;
 			this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1, discOrder2, discOrder3);
 		}
 
@@ -637,14 +637,14 @@ struct Loom : Module {
 	void onReset() override {
 		this->algo.oversamplingEnabled = false;
 		this->algo.doADAA = true;
-		this->algo.doBlep = true;
+		this->algo.blepLevel = 3;
 	}
 
 	json_t* dataToJson() override {
 		json_t* rootJ = json_object();
 		json_object_set_new(rootJ, "oversample", json_boolean(this->algo.oversamplingEnabled));
 		json_object_set_new(rootJ, "doADAA", json_boolean(this->algo.doADAA));
-		json_object_set_new(rootJ, "doBlep", json_integer(this->algo.doBlep));
+		json_object_set_new(rootJ, "blepLevel", json_integer(this->algo.blepLevel));
 		return rootJ;
 	}
 
@@ -659,9 +659,9 @@ struct Loom : Module {
 			this->algo.doADAA = json_boolean_value(doADAAJ);
 		}
 
-		json_t* doBlepJ = json_object_get(rootJ, "doBlep");
-		if (doBlepJ) {
-			this->algo.doBlep = json_integer_value(doBlepJ);
+		json_t* blepLevelJ = json_object_get(rootJ, "blepLevel");
+		if (blepLevelJ) {
+			this->algo.blepLevel = json_integer_value(blepLevelJ);
 		}
 	}
 
@@ -884,41 +884,41 @@ struct LoomWidget : ModuleWidget {
 
 		struct BlepItem : MenuItem {
 			Loom* module;
-			int doBlep;
+			int blepLevel;
 			void onAction(const event::Action& e) override {
-				module->algo.doBlep = doBlep;
+				module->algo.blepLevel = blepLevel;
 			}
 		};
 
 		{
 			BlepItem* offItem = createMenuItem<BlepItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->algo.doBlep));
+			offItem->rightText = CHECKMARK(!(module->algo.blepLevel));
 			offItem->module = module;
-			offItem->doBlep = 0;
+			offItem->blepLevel = 0;
 			menu->addChild(offItem);
 
 			BlepItem* onItem1 = createMenuItem<BlepItem>("0th Order");
-			onItem1->rightText = CHECKMARK(module->algo.doBlep == 1);
+			onItem1->rightText = CHECKMARK(module->algo.blepLevel == 1);
 			onItem1->module = module;
-			onItem1->doBlep = 1;
+			onItem1->blepLevel = 1;
 			menu->addChild(onItem1);
 
 			BlepItem* onItem2 = createMenuItem<BlepItem>("1st Order");
-			onItem2->rightText = CHECKMARK(module->algo.doBlep == 2);
+			onItem2->rightText = CHECKMARK(module->algo.blepLevel == 2);
 			onItem2->module = module;
-			onItem2->doBlep = 2;
+			onItem2->blepLevel = 2;
 			menu->addChild(onItem2);
 
 			BlepItem* onItem3 = createMenuItem<BlepItem>("2nd Order");
-			onItem3->rightText = CHECKMARK(module->algo.doBlep == 3);
+			onItem3->rightText = CHECKMARK(module->algo.blepLevel == 3);
 			onItem3->module = module;
-			onItem3->doBlep = 3;
+			onItem3->blepLevel = 3;
 			menu->addChild(onItem3);
 
 			BlepItem* onItem4 = createMenuItem<BlepItem>("3rd Order");
-			onItem4->rightText = CHECKMARK(module->algo.doBlep == 4);
+			onItem4->rightText = CHECKMARK(module->algo.blepLevel == 4);
 			onItem4->module = module;
-			onItem4->doBlep = 4;
+			onItem4->blepLevel = 4;
 			menu->addChild(onItem4);
 		}
 	}
