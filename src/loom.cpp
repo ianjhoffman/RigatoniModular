@@ -278,7 +278,7 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 		shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivotHarm, intensity);
 
 		// Fundamental boosting
-		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], this->boostFund ? .5f : 0.f);
+		harmonicAmplitudes[0] = simd::fmax(harmonicAmplitudes[0], this->boostFund ? float_4(.5f, 0.f, 0.f, 0.f) : 0.f);
 
 		// Set summed amplitudes for light show
 		for (int i = 0; i < 8; i++) {
