@@ -1,8 +1,10 @@
 #include "plugin.hpp"
-#include "waveshaping/WaveshapingADAA1.hpp"
 #include "sequencer/EuclideanPatternGenerator.hpp"
 #include "math/Utility.hpp"
+#include "dsp/HighOrderLinearBlep.hpp"
 #include "dsp/OversampledAlgorithm.hpp"
+#include "dsp/PolyBlep.hpp"
+#include "dsp/WaveshapingADAA1.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -22,7 +24,8 @@ const int AMP_SHIFT = 60;
 const float LFO_MULTIPLIER = .05f;
 const float VCO_MULTIPLIER = 20.f;
 const float LIN_FM_FACTOR = 5.f;
-const float MAX_FREQ = 10240.f;
+const float MAX_FREQ = 10000.f;
+constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f; // a fifth
 
 // Swap order of every 4-bit chunk
 inline static uint64_t flipNibbleEndian(uint64_t a) {
@@ -52,23 +55,21 @@ void shapeAmplitudes(
 ) {
 	constexpr float SLOPE_SCALE = 0.01f;
 	constexpr float SLOPES[3][2] = {
-		{0.1f * SLOPE_SCALE, -2.f * SLOPE_SCALE},
-		{-3.f * SLOPE_SCALE, 3.f * SLOPE_SCALE},
-		{-2.f * SLOPE_SCALE, 0.1f * SLOPE_SCALE},
+		{                0.f, 10.f * SLOPE_SCALE},
+		{-15.f * SLOPE_SCALE, 15.f * SLOPE_SCALE},
+		{-10.f * SLOPE_SCALE, 0.f},
 	};
 
-	float doubleIntensity = intensity * 2.f;
-	float slopeMultiplier = (doubleIntensity < 1.f) ? (doubleIntensity * 4.f) : (8.f * doubleIntensity - 4.f);
-	float belowSlope = SLOPES[tilt][0] * slopeMultiplier;
-	float aboveSlope = SLOPES[tilt][1] * slopeMultiplier;
-	float pivotBase = crossfade(0.f, (tilt == 1) ? .15f : 0.f, clamp(doubleIntensity));
+	float_4 belowSlope = SLOPES[tilt][0] * intensity;
+	float_4 aboveSlope = SLOPES[tilt][1] * intensity;
+	float_4 pivotBase = crossfade(0.f, (tilt == 1) ? .25f : 0.f, intensity);
 	float_4 pivotDiffs = pivotHarm - float_4(0.f, 1.f, 2.f, 3.f);
 	auto shiftAmt = AMP_SHIFT;
 	harmonicMask = flipNibbleEndian(harmonicMask);
 	for (int i = 0; i < numBlocks; i++) {
 		float_4 slopes = simd::ifelse(pivotDiffs > 0, belowSlope, aboveSlope);
 		auto addMask = simd::movemaskInverse<float_4>((harmonicMask >> shiftAmt) & AMP_MASK);
-		auto toAdd = simd::ifelse(addMask, pivotBase + slopes * simd::abs(pivotDiffs), 0.f);
+		auto toAdd = addMask & (pivotBase + slopes * pivotDiffs);
 		amplitudes[i] = clamp(amplitudes[i] + toAdd, 0.f, 1.5f); // No negative amplitudes
 
 		pivotDiffs -= 4.f;
@@ -76,28 +77,12 @@ void shapeAmplitudes(
 	}
 }
 
-float calculateFrequencyHz(float coarse, float fine, float pitchCv, float fmCv, bool expFm, bool lfoMode) {
-	constexpr float VCO_FINE_TUNE_OCTAVES = 7.f / 12.f;
-
-	coarse += expFm ? fmCv : 0.f;
-	float multiplier = lfoMode ? LFO_MULTIPLIER : VCO_MULTIPLIER;
-	fine *= lfoMode ? 1.f : VCO_FINE_TUNE_OCTAVES;
-	float freq = multiplier * dsp::exp2_taylor5(coarse + pitchCv + fine);
-	freq += expFm ? 0.f : fmCv * multiplier * LIN_FM_FACTOR;
-
+inline float calculateFrequencyHz(float expCv, float linCv, float multiplier) {
 	// Clamp to max frequency, allow negative frequency for thru-zero linear FM
-	return std::min(freq, MAX_FREQ);
+	return std::min(multiplier * (dsp::exp2_taylor5(expCv) + linCv), MAX_FREQ);
 }
 
-struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
-	static constexpr uint64_t AMP_MASK = 0x000000000000000f;
-	static constexpr int AMP_SHIFT = 60;
-	static constexpr float LFO_MULTIPLIER = .05f;
-	static constexpr float VCO_MULTIPLIER = 20.f;
-	static constexpr float LIN_FM_FACTOR = 5.f;
-	static constexpr float MAX_FREQ = 10240.f;
-	static constexpr float SLOPE_SCALE = 0.01f;
-
+struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4> {
 	// Anti-aliased drive processor
 	QuadraticDistortionADAA1<float_4> driveProcessor{};
 
@@ -112,13 +97,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 
 	// Synthesis parameters
 	std::array<float_4, 16> phaseAccumulators;
-	dsp::MinBlepGenerator<16, 16, float_4> syncBlep;
-	dsp::MinBlepGenerator<16, 16, float> squareBlep;
+	HighOrderLinearBlep<16, 32, float_4> syncBlep;
 	float lastSyncValue{0.f};
+	float lastFundPhase{0.f};
+	float freqMultiplier{VCO_MULTIPLIER};
+
+	// Handy place to do endianness-independent packing/unpacking of float_4
+	float vecTransfer[4];
 
 	// Discrete switched parameters that aren't interpolated
-	bool lfoMode{false};
-	bool expFm{false};
 	bool splitMode{false};
 	bool boostFund{true};
 	int tilt{0};
@@ -131,17 +118,17 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 
 	// Additional configurable parameters for anti-aliasing
 	bool doADAA{true};
-	bool doBlep{true};
+	int blepLevel{3};
 
-	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4>(ParameterInterpolator<4, float_4>()) {
+	LoomAlgorithm() : OversampledAlgorithm<2, 10, 1, 3, float_4, float_4>(ParameterInterpolator<3, float_4>()) {
 		// Set up everything pre-cached/pre-allocated
 		this->populateHarmonicSplitMasks();
 		this->calculateBaseAmplitudes();
 		this->phaseAccumulators.fill(0.f);		
 	}
 
-	// Gets the Euclidean pattern with the supplied parameters, masked and with
-	// each nibble flipped for simd::ifelse (which expects the opposite order)
+	// Gets the Euclidean pattern with the supplied parameters, masked and with each
+	// nibble flipped for simd::movemaskInverse (which expects the opposite order)
 	inline uint64_t getPattern(uint64_t mask, uint8_t length, uint8_t density, uint8_t shift) {
 		return flipNibbleEndian(mask & this->patternGenerator.getShiftedPattern(length, density, shift));
 	}
@@ -189,73 +176,70 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		int iShiftHigh = iShiftLow + 1;
 		float shiftFade = fShift - iShiftLow;
 
-		float_4 fader = {
-			(1.f - densityFade) * (1.f - shiftFade), // low density, low shift
-			(1.f - densityFade) * shiftFade, // low density, high shift
-			densityFade * (1.f - shiftFade), // high density, low shift
-			densityFade * shiftFade // high density, high shift
-		};
-		fader *= lengthFade;
+		float_4 lowLowContrib = (1.f - densityFade) * (1.f - shiftFade);
+		float_4 lowHighContrib = (1.f - densityFade) * shiftFade;
+		float_4 highLowContrib = densityFade * (1.f - shiftFade);
+		float_4 highHighContrib = densityFade * shiftFade;
 
-		// Do blending
+		// 4 patterns between which to blend
 		auto lowDensLowShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftLow);
 		auto lowDensHighShift = this->getPattern(harmonicMask, length, iDensityLow, iShiftHigh);
 		auto highDensLowShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftLow);
 		auto highDensHighShift = this->getPattern(harmonicMask, length, iDensityHigh, iShiftHigh);
 		auto shiftAmt = AMP_SHIFT;
+		float_4 accum;
 		for (int i = 0; i < numBlocks; i++) {
 			auto lowLow = simd::movemaskInverse<float_4>((lowDensLowShift >> shiftAmt) & AMP_MASK);
 			auto lowHigh = simd::movemaskInverse<float_4>((lowDensHighShift >> shiftAmt) & AMP_MASK);
 			auto highLow = simd::movemaskInverse<float_4>((highDensLowShift >> shiftAmt) & AMP_MASK);
 			auto highHigh = simd::movemaskInverse<float_4>((highDensHighShift >> shiftAmt) & AMP_MASK);
 
-			// Wish I could do a matrix multiplication here
-			amplitudes[i] += simd::ifelse(lowLow, fader[0], 0.f);
-			amplitudes[i] += simd::ifelse(lowHigh, fader[1], 0.f);
-			amplitudes[i] += simd::ifelse(highLow, fader[2], 0.f);
-			amplitudes[i] += simd::ifelse(highHigh, fader[3], 0.f);
+			accum = (lowLow & lowLowContrib) + (lowHigh & lowHighContrib);
+			accum += (highLow & highLowContrib) + (highHigh & highHighContrib);
+			amplitudes[i] += lengthFade * accum;
 
 			shiftAmt -= 4;
 		}
 	}
 
-	std::pair<int, uint64_t> setAmplitudes(
+	void setAmplitudes(
 		std::array<float_4, 16> &amplitudes,
 		int harmonicLimit,
 		float length,  // 1-64
 		float density, // 0-1
 		float stride,  // 0-4
-		float shift    // 0-1
+		float shift,   // 0-1
+		int *numBlocks,
+		uint64_t *harmonicMask
 	) {
-		uint64_t harmonicMask = 0xffffffffffffffff << (64 - harmonicLimit);
+		*harmonicMask = 0xffffffffffffffff << (64 - harmonicLimit);
 		int iLengthLow = (int)std::floor(length);
 		int iLengthHigh = std::min(iLengthLow + 1, 64);
-		int numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
+		*numBlocks = (std::min(harmonicLimit, iLengthHigh) + 0b11) >> 2;
 		float lengthFade = length - iLengthLow;
 
-		this->setAmplitudesHalf(amplitudes, iLengthHigh, lengthFade, density, shift, harmonicMask, numBlocks);
-		this->setAmplitudesHalf(amplitudes, iLengthLow, (1.f - lengthFade), density, shift, harmonicMask, numBlocks);
-		return {numBlocks, harmonicMask};
+		this->setAmplitudesHalf(amplitudes, iLengthHigh, lengthFade, density, shift, *harmonicMask, *numBlocks);
+		this->setAmplitudesHalf(amplitudes, iLengthLow, (1.f - lengthFade), density, shift, *harmonicMask, *numBlocks);
 	}
 
-	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 4> &params) override {
+	std::array<float_4, 1> processFrame(const Module::ProcessArgs& args, std::array<float_4, 3> &params) override {
 		// Unpack params
-		float length = params[0][0];
-		float density = params[0][1];
-		float shift = params[0][2];
-		float stride = params[0][3];
+		params[0].store(this->vecTransfer);
+		float length = this->vecTransfer[0];
+		float density = this->vecTransfer[1];
+		float shift = this->vecTransfer[2];
+		float stride = this->vecTransfer[3];
 
-		float fmCv = params[1][0];
-		float coarse = params[1][1];
-		float fine = params[1][2];
-		float pitchCv = params[1][3];
+		params[1].store(this->vecTransfer);
+		float expCv = this->vecTransfer[0];
+		float linCv = this->vecTransfer[1];
+		float sinPhaseOffset = this->vecTransfer[2];
+		float syncValue = this->vecTransfer[3];
 
-		float pivotHarm = params[2][0];
-		float intensity = params[2][1];
-		float drive = params[2][2];
-
-		float syncValue = params[3][0];
-		float sinPhaseOffset = params[3][1];
+		params[2].store(this->vecTransfer);
+		float pivotHarm = this->vecTransfer[0];
+		float intensity = this->vecTransfer[1];
+		float drive = this->vecTransfer[2];
 
 		// Perform any necessary modifications on unpacked parameters
 		length = scaleLength(clamp(length, -2.f, 2.f));
@@ -265,17 +249,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 		if (this->continuousStrideMode == ContinuousStrideMode::OFF) stride = std::round(stride);
 		this->strideLight = std::abs(stride - 1.f) < .01f; // Reasonable epsilon
 
-		fmCv = clamp(fmCv, -5.f, 5.f);
+		sinPhaseOffset = clamp(sinPhaseOffset, -1.f, 1.f);
+		sinPhaseOffset -= std::floor(sinPhaseOffset);
 
 		pivotHarm = scaleLength(clamp(pivotHarm, -2.f, 2.f)) - 1.f;
 		intensity = clamp(intensity);
 		drive = clamp(drive, 0.f, 2.f);
 
-		sinPhaseOffset = clamp(sinPhaseOffset, -1.f, 1.f);
-		sinPhaseOffset -= std::floor(sinPhaseOffset);
-
 		// Calculate oscillator frequency based on a multitude of factors
-		float freq = calculateFrequencyHz(coarse, fine, pitchCv, fmCv, expFm, this->lfoMode);
+		float freq = calculateFrequencyHz(expCv, linCv, this->freqMultiplier);
 
 		// Calculate harmonic limit for anti-aliasing, as well as associated mask for shifted patterns.
 		// This functions as simple built-in band-limiting (not perfect because of drive, fm, pm,
@@ -288,11 +270,15 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 
 		// Actually do partial amplitude/frequency calculations
 		std::array<float_4, 16> harmonicAmplitudes{};
-		auto setAmplitudesRet = this->setAmplitudes(
-			harmonicAmplitudes, harmonicLimit, length, density, stride, shift
-		);
-		int numBlocks = setAmplitudesRet.first;
-		uint64_t harmonicMask = setAmplitudesRet.second;
+		int numBlocks;
+		uint64_t harmonicMask;
+		this->setAmplitudes(harmonicAmplitudes, harmonicLimit, length, density, stride, shift, &numBlocks, &harmonicMask);
+
+		// Shaping section
+		shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivotHarm, intensity);
+
+		// Fundamental boosting
+		harmonicAmplitudes[0] = simd::fmax(harmonicAmplitudes[0], this->boostFund ? float_4(.5f, 0.f, 0.f, 0.f) : 0.f);
 
 		// Set summed amplitudes for light show
 		for (int i = 0; i < 8; i++) {
@@ -300,204 +286,177 @@ struct LoomAlgorithm : OversampledAlgorithm<2, 10, 1, 4, float_4, float_4> {
 			this->ampLights[i] = harmonicAmplitudes[off] + harmonicAmplitudes[off + 1];
 		}
 
-		// Shaping section
-		shapeAmplitudes(harmonicAmplitudes, harmonicMask, numBlocks, length, tilt, pivotHarm, intensity);
-
-		// Fundamental boosting
-		harmonicAmplitudes[0][0] = std::max(harmonicAmplitudes[0][0], this->boostFund ? .5f : 0.f);
-
 		// Calculate sync
 		float deltaSync = syncValue - this->lastSyncValue;
 		float syncCrossing = -this->lastSyncValue / deltaSync;
 		this->lastSyncValue = syncValue;
 		bool normalSync = (0.f < syncCrossing) && (syncCrossing <= 1.f) && (syncValue >= 0.f);
 
-		// Calculate phase modulation offsets
-		float cosPhaseOffset = sinPhaseOffset + 0.25f;
-		cosPhaseOffset -= std::floor(cosPhaseOffset);
-
 		// Additive synthesis params setup
 		float phaseInc = freq * args.sampleTime;
 		phaseInc -= std::floor(phaseInc);
 		float normalSyncPhase = (1.f - syncCrossing) * phaseInc;
-		float scale = phaseInc * clampedStride;
-		float_4 scaledHarmonicLowerBound = harmonicMultipleLimit * scale * .75f;
-		float_4 scaledHarmonicFalloffSlope = simd::rcp(-.25f * harmonicMultipleLimit * scale * this->getMultiplier());
+		float_4 harmonicFadeLowerBound = harmonicMultipleLimit * .666666666f;
+		float_4 harmonicFalloffSlope = simd::rcp(-.333333333333f * harmonicMultipleLimit);
 
 		// Calculate fundamental sync for non-free continuous stride
-		float fundAccumBeforeInc = this->phaseAccumulators[0][0];
-		float fundPhaseWrapped = fundAccumBeforeInc + phaseInc - 1.f;
-		bool fundSync = fundPhaseWrapped >= 0.f;
+		float fundPhaseWrapped = this->lastFundPhase + phaseInc;
+		bool fundSync = fundPhaseWrapped >= 1.f;
+		fundPhaseWrapped -= std::floor(fundPhaseWrapped);
 
 		// 2 types of sync that can introduce discontinuities
 		bool doSync = false;
-		float syncPhase = 0.f;
-		float minBlepP = 0.f;
+		float syncedPhase = fundPhaseWrapped;
+		float phaseAddAtSync = 0.f;
+		float blepOffset = 0.f;
 		if (normalSync) {
 			doSync = true;
-			minBlepP = syncCrossing - 1.f;
-			syncPhase = normalSyncPhase;
+			blepOffset = 1.f - syncCrossing;
+			phaseAddAtSync = syncCrossing * phaseInc;
+			syncedPhase = normalSyncPhase;
 		} else if (continuousStrideMode != ContinuousStrideMode::FREE && fundSync) {
 			doSync = true;
-			minBlepP = -(fundPhaseWrapped / phaseInc);
-			syncPhase = fundPhaseWrapped;
+			blepOffset = fundPhaseWrapped / phaseInc;
+			phaseAddAtSync = 1.f - this->lastFundPhase;
+			syncedPhase = fundPhaseWrapped;
 		}
 
-		// Sadly for band-limiting with MinBLEP we have to calculate all the partials
-		// for each output for both synced and unsynced sine and cosine
-		std::array<float_4, 16> out1PhaseWithoutSync;
+		this->lastFundPhase = syncedPhase;
+
 		std::array<float_4, 16> &oddHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 1 : 0];
 		std::array<float_4, 16> &evenHarmSplitMask = this->harmonicSplitMasks[this->splitMode ? 2 : 0];
-		float_4 out1WithoutSyncSum{}, out1WithSyncSum{}, out2WithoutSyncSum{}, out2WithSyncSum{};
+		float_4 out1Sum{}, out2Sum{};
+		float_4 out1DiscSum{}, out2DiscSum{};
+		float_4 out1DerivativeDiscSum{}, out2DerivativeDiscSum{};
 
-		// Trying something new with progressive phase multiple calculations for precision (?)
-		float_4 phaseIncAdd = phaseInc * 4.f * stride;
-		float_4 syncPhaseAdd = syncPhase * 4.f * stride;
-		float_4 sinPhaseOffsetAdd = sinPhaseOffset * 4.f * stride;
-		float_4 cosPhaseOffsetAdd = sinPhaseOffsetAdd + stride;
-
+		// Trying something new with progressive phase multiple calculations.
+		// Calculate the base values for various synthesis parameters for the first 4 harmonics
+		// as well as the increments of those values for every block of 4 harmonics. This lets
+		// us get rid of a bunch of multiplies inside the synthesis loop.
 		float_4 multiples = {1.f, 1.f + stride, 1.f + 2 * stride, 1.f + 3 * stride};
 		float_4 basePhaseInc = multiples * phaseInc;
-		float_4 out1SyncPhase = multiples * syncPhase;
-		float_4 out1PmAdd = multiples * sinPhaseOffset;
-		float_4 out2PmAdd = multiples * cosPhaseOffset;
-		float_4 overallAmplitude;
+		float_4 sinSyncPhase = multiples * syncedPhase;
+		float_4 phaseOffset = multiples * sinPhaseOffset;
+		float_4 syncPhaseInc = multiples * phaseAddAtSync;
+		float_4 quadOffset = multiples * 0.25f;
+
+		float_4 basePhaseIncAdd = phaseInc * 4.f * stride;
+		float_4 sinSyncPhaseAdd = syncedPhase * 4.f * stride;
+		float_4 phaseOffsetAdd = phaseOffset * 4.f * stride;
+		float_4 multiplesAdd = 4.f * stride;
+		float_4 syncPhaseIncAdd = phaseAddAtSync * 4.f * stride;
+		float_4 quadOffsetAdd = stride;
+
+		// Update accumulators
+		float_4 phaseNow[16];
+		float_4 phaseOffsets[16];
+		float_4 lastPhase[16];
 		for (int i = 0; i < 16; i++) {
-			// Always update phase accumulators
-			out1PhaseWithoutSync[i] = this->phaseAccumulators[i] + basePhaseInc;
-			out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
-			float_4 phaseAccumVal = out1PhaseWithoutSync[i]; // store before doing PM
+			lastPhase[i] = this->phaseAccumulators[i];
+			this->phaseAccumulators[i] = doSync ? sinSyncPhase : (this->phaseAccumulators[i] + basePhaseInc);
+			this->phaseAccumulators[i] -= simd::floor(this->phaseAccumulators[i]);
 
-			if (i < numBlocks) {
-				overallAmplitude = harmonicAmplitudes[i] * this->baseAmplitudes[i];
-				// Harmonic falloff between ~.75x and ~1x Nyquist
-				overallAmplitude *= simd::clamp(
-					1.f + (basePhaseInc - scaledHarmonicLowerBound) * scaledHarmonicFalloffSlope
-				);
-				
-				// Phase modulation
-				out1PhaseWithoutSync[i] += out1PmAdd;
-				out1PhaseWithoutSync[i] -= simd::floor(out1PhaseWithoutSync[i]);
-
-				// Output 2 doesn't use cosine phase partials in odd/even split mode
-				float_4 out2PhaseWithoutSync = this->splitMode ? out1PhaseWithoutSync[i] : phaseAccumVal + out2PmAdd;
-				out2PhaseWithoutSync -= simd::floor(out2PhaseWithoutSync);
-
-				// Calculate sin/cos with amplitudes, sum with output
-				out1WithoutSyncSum += simd::ifelse(
-					oddHarmSplitMask[i],
-					sin2pi_chebyshev(out1PhaseWithoutSync[i]) * overallAmplitude,
-					0.f
-				);
-
-				out2WithoutSyncSum += simd::ifelse(
-					evenHarmSplitMask[i],
-					sin2pi_chebyshev(out2PhaseWithoutSync) * overallAmplitude,
-					0.f
-				);
-			}
-
-			// It turns out that branching in the loop is significantly faster than branchless
-			if (doSync) {
-				float_4 out1PhaseWithSync = out1SyncPhase;
-				out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
-				phaseAccumVal = out1PhaseWithSync; // store before doing PM
-
-				if (i < numBlocks) {
-					// Phase modulation (sync)
-					out1PhaseWithSync += out1PmAdd;
-					out1PhaseWithSync -= simd::floor(out1PhaseWithSync);
-
-					// Output 2 doesn't use cosine phase partials in odd/even split mode
-					float_4 out2PhaseWithSync = this->splitMode ? out1PhaseWithSync : phaseAccumVal + out2PmAdd;
-					out2PhaseWithSync -= simd::floor(out2PhaseWithSync);
-
-					out1WithSyncSum += simd::ifelse(
-						oddHarmSplitMask[i],
-						sin2pi_chebyshev(out1PhaseWithSync) * overallAmplitude,
-						0.f
-					);
-
-					out2WithSyncSum += simd::ifelse(
-						evenHarmSplitMask[i],
-						sin2pi_chebyshev(out2PhaseWithSync) * overallAmplitude,
-						0.f
-					);
-				}
-			}
-
-			this->phaseAccumulators[i] = phaseAccumVal;
+			phaseNow[i] = this->phaseAccumulators[i] + phaseOffset;
+			phaseNow[i] -= simd::floor(phaseNow[i]);
+			phaseOffsets[i] = phaseOffset;
 
 			// Update progressive phase multiple calculations
-			basePhaseInc += phaseIncAdd;
-			out1SyncPhase += syncPhaseAdd;
-			out1PmAdd += sinPhaseOffsetAdd;
-			out2PmAdd += cosPhaseOffsetAdd;
+			basePhaseInc += basePhaseIncAdd;
+			phaseOffset += phaseOffsetAdd;
+			sinSyncPhase += sinSyncPhaseAdd;
 		}
 
-		// We weren't updating these in the loop so set them here
-		if (!doSync) {
-			out1WithSyncSum = out1WithoutSyncSum;
-			out2WithSyncSum = out2WithoutSyncSum;
+		for (int i = 0; i < numBlocks; i++) {
+			float_4 overallAmplitude = harmonicAmplitudes[i] * simd::fmin(simd::rcp(multiples), this->baseAmplitudes[i]);
+			// Harmonic falloff between ~.75x and ~1x Nyquist
+			overallAmplitude *= simd::clamp(
+				1.f + (multiples - harmonicFadeLowerBound) * harmonicFalloffSlope
+			);
+
+			if (doSync) {
+				// Discontinuity
+				float_4 out1PhaseAtSync = lastPhase[i] + syncPhaseInc + phaseOffsets[i];
+				out1PhaseAtSync -= simd::floor(out1PhaseAtSync);
+
+				float_4 out1PhaseAfterSync = phaseOffsets[i];
+				out1PhaseAfterSync -= simd::floor(out1PhaseAfterSync);
+
+				float_4 out2PhaseAtSync = out1PhaseAtSync + quadOffset;
+				out2PhaseAtSync -= simd::floor(out2PhaseAtSync);
+
+				float_4 out2PhaseAfterSync = out1PhaseAfterSync + quadOffset;
+				out2PhaseAfterSync -= simd::floor(out2PhaseAfterSync);
+
+				float_4 out1ValAtSync, out1DerivativeValAtSync, out1ValAfterSync, out1DerivativeValAfterSync;
+				float_4 out2ValAtSync, out2DerivativeValAtSync, out2ValAfterSync, out2DerivativeValAfterSync;
+				sincos2pi_chebyshev(out1PhaseAtSync, out1ValAtSync, out1DerivativeValAtSync);
+				sincos2pi_chebyshev(out1PhaseAfterSync, out1ValAfterSync, out1DerivativeValAfterSync);
+				sincos2pi_chebyshev(out2PhaseAtSync, out2ValAtSync, out2DerivativeValAtSync);
+				sincos2pi_chebyshev(out2PhaseAfterSync, out2ValAfterSync, out2DerivativeValAfterSync);
+
+				// 0th derivative discontinuity
+				float_4 out1DiscAtSync = overallAmplitude * (out1ValAfterSync - out1ValAtSync);
+				float_4 out2DiscAtSync = overallAmplitude * (out2ValAfterSync - out2ValAtSync);
+				out1DiscSum += oddHarmSplitMask[i] & out1DiscAtSync;
+				out2DiscSum += evenHarmSplitMask[i] & (this->splitMode ? out1DiscAtSync : out2DiscAtSync);
+
+				// 1st derivative discontinuity
+				float_4 out1DerivativeDiscAtSync = overallAmplitude * (out1DerivativeValAfterSync - out1DerivativeValAtSync);
+				float_4 out2DerivativeDiscAtSync = overallAmplitude * (out2DerivativeValAfterSync - out2DerivativeValAtSync);
+				out1DerivativeDiscSum += oddHarmSplitMask[i] & out1DerivativeDiscAtSync;
+				out2DerivativeDiscSum += evenHarmSplitMask[i] & (this->splitMode ? out1DerivativeDiscAtSync : out2DerivativeDiscAtSync);
+			}
+
+			// Actual outputs
+			float_4 sinNow = overallAmplitude * sin2pi_chebyshev(phaseNow[i]);
+			phaseNow[i] += quadOffset;
+			phaseNow[i] -= simd::floor(phaseNow[i]);
+			float_4 cosNow = overallAmplitude * sin2pi_chebyshev(phaseNow[i]);
+			out1Sum += oddHarmSplitMask[i] & sinNow;
+			out2Sum += evenHarmSplitMask[i] & (this->splitMode ? sinNow : cosNow);
+
+			// Update progressive phase multiple calculations
+			multiples += multiplesAdd;
+			syncPhaseInc += syncPhaseIncAdd;
+			quadOffset += quadOffsetAdd;
 		}
 
 		// Collapse the remaining 4 harmonic accumulators for each output
-		float_4 mainOutsPacked = {out1WithoutSyncSum[0], out1WithSyncSum[0], out2WithoutSyncSum[0], out2WithSyncSum[0]};
-		mainOutsPacked += {out1WithoutSyncSum[1], out1WithSyncSum[1], out2WithoutSyncSum[1], out2WithSyncSum[1]};
-		mainOutsPacked += {out1WithoutSyncSum[2], out1WithSyncSum[2], out2WithoutSyncSum[2], out2WithSyncSum[2]};
-		mainOutsPacked += {out1WithoutSyncSum[3], out1WithSyncSum[3], out2WithoutSyncSum[3], out2WithSyncSum[3]};
-		mainOutsPacked *= (float)this->splitMode + 1.f;
+		float_4 fundPhases = {fundPhaseWrapped, syncedPhase, fundPhaseWrapped + 0.25f, syncedPhase + 0.25f};
+		fundPhases -= simd::floor(fundPhases);
+		float_4 fundVals = sin2pi_chebyshev(fundPhases);
+		fundVals.store(this->vecTransfer);
 
-		// Fundamental and square outs are a lot easier
-		auto fundPhaseWithoutSync = out1PhaseWithoutSync[0][0];
-		auto fundPhaseWithSync = this->phaseAccumulators[0][0];
-		float fundOutWithoutSync = sin2pi_chebyshev<float>(fundPhaseWithoutSync);
-		float fundOutWithSync = sin2pi_chebyshev<float>(fundPhaseWithSync);
-		float squareOutWithSync = (fundPhaseWithSync < 0.5f) ? 1.f : -1.f;
+		float_4 outsWithSync = {sum_float4(out1Sum), sum_float4(out2Sum), this->vecTransfer[1], 0.f};
 
 		// Oscillator light indicator based on fundamental phase accumulator
-		this->oscLight = fundPhaseWithSync > 0.5f;
-
-		// Do drive before BLEP, driving BLEP might introduce more aliasing
-		mainOutsPacked *= 0.5f * drive;
-		mainOutsPacked = this->doADAA ? this->driveProcessor.process(mainOutsPacked) : this->driveProcessor.transform(mainOutsPacked);
+		this->oscLight = syncedPhase > 0.5f;
 
 		// BLEP
-		if (doSync) {
-			float_4 discontinuities = {
-				mainOutsPacked[1] - mainOutsPacked[0],
-				mainOutsPacked[3] - mainOutsPacked[2],
-				fundOutWithSync - fundOutWithoutSync,
-				0.f,
-			};
-			this->syncBlep.insertDiscontinuity(minBlepP, discontinuities);
+		if (doSync && this->blepLevel) {
+			float_4 discOrder0 = float_4(
+				sum_float4(out1DiscSum),
+				sum_float4(out2DiscSum),
+				this->vecTransfer[1] - this->vecTransfer[0],
+				0.f
+			);
+			float_4 discOrder1 = (this->blepLevel > 1) ? float_4(
+				sum_float4(out1DerivativeDiscSum),
+				sum_float4(out2DerivativeDiscSum),
+				this->vecTransfer[3] - this->vecTransfer[2],
+				0.f
+			) : 0.f;
+			auto discOrder2 = (this->blepLevel > 2) ? -discOrder0 : 0.f;
+			auto discOrder3 = (this->blepLevel > 3) ? -discOrder1 : 0.f;
+			this->syncBlep.insertDiscontinuities(blepOffset, discOrder0, discOrder1, discOrder2, discOrder3);
 		}
 
-		float_4 outsPacked = {mainOutsPacked[1], mainOutsPacked[3], fundOutWithSync, squareOutWithSync};
-
-		if (this->doBlep) {
-			float squareOutWithoutSync = (fundPhaseWithoutSync < 0.5f) ? 1.f : -1.f;
-			float squareHalfCrossing = (0.5f - fundAccumBeforeInc) / phaseInc;
-			bool squareStepDown = (0 < squareHalfCrossing) & (squareHalfCrossing <= 1.f);
-
-			if (normalSync) {
-				// Hard sync step (could be up, could be nothing)
-				this->squareBlep.insertDiscontinuity(minBlepP, squareOutWithSync - squareOutWithoutSync);
-			} else if (fundSync) {
-				// Square step up at 0% phase
-				this->squareBlep.insertDiscontinuity(-(fundPhaseWrapped / phaseInc), 2.f);
-			} else if (squareStepDown) {
-				// Square step down at 50% phase
-				this->squareBlep.insertDiscontinuity(squareHalfCrossing - 1.f, -2.f);
-			}
-
-			outsPacked[3] += this->squareBlep.process();
-		}
-
-		auto syncBlepVal = this->syncBlep.process();
-		outsPacked = 5.f * (outsPacked + (this->doBlep ? syncBlepVal : 0.f));
-
-		return std::array<float_4, 1>{outsPacked};
+		float_4 outsPacked;
+		this->syncBlep.processSample(outsWithSync, outsPacked);
+		float ampScale = 0.5f * drive * ((float)this->splitMode + 1.f);
+		outsPacked *= {ampScale, ampScale, 1.f, 0.f};
+		outsPacked = this->doADAA ? this->driveProcessor.process(outsPacked) : this->driveProcessor.transform(outsPacked);
+		return std::array<float_4, 1>{5.f * outsPacked};
 	}
 };
 
@@ -518,7 +477,7 @@ struct Loom : Module {
 		HARM_SHIFT_ATTENUVERTER_PARAM,
 		SPECTRAL_PIVOT_KNOB_PARAM,
 		SPECTRAL_INTENSITY_KNOB_PARAM,
-		SPECTRAL_INTENSITY_ATTENUVERTER_PARAM,
+		SPECTRAL_PIVOT_ATTENUVERTER_PARAM,
 		SPECTRAL_TILT_SWITCH_PARAM,
 		DRIVE_KNOB_PARAM,
 		DRIVE_ATTENUVERTER_PARAM,
@@ -544,7 +503,7 @@ struct Loom : Module {
 		INPUTS_LEN
 	};
 	enum OutputId {
-		SQUARE_OUTPUT,
+		ENV_OUTPUT,
 		FUNDAMENTAL_OUTPUT,
 		ODD_ZERO_DEGREE_OUTPUT,
 		EVEN_NINETY_DEGREE_OUTPUT,
@@ -571,11 +530,11 @@ struct Loom : Module {
 		struct CoarseTuneQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				if (module->algo.lfoMode) {
-					// 0.003125Hz (320 second cycle) to 25.6Hz
+				if (module->lfoMode) {
+					// 0.003125Hz (320 second cycle) to 25Hz
 					displayMultiplier = LFO_MULTIPLIER;
 				} else {
-					// 1.25Hz to 10.24kHz
+					// 1.25Hz to 10kHz
 					displayMultiplier = VCO_MULTIPLIER;
 				}
 				return ParamQuantity::getDisplayValue();
@@ -585,7 +544,7 @@ struct Loom : Module {
 		struct FineTuneQuantity : ParamQuantity {
 			float getDisplayValue() override {
 				Loom* module = reinterpret_cast<Loom*>(this->module);
-				if (module->algo.lfoMode) {
+				if (module->lfoMode) {
 					// .5x to 2x
 					unit = "x";
 					displayBase = 2.f;
@@ -609,7 +568,7 @@ struct Loom : Module {
 		};
 
 		// Control Knobs
-		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 9.f, 1.f, "Coarse Tune", " Hz", 2.f);
+		configParam<CoarseTuneQuantity>(COARSE_TUNE_KNOB_PARAM, -4.f, 8.965784284662087f, 1.f, "Coarse Tune", " Hz", 2.f);
 		configParam<FineTuneQuantity>(FINE_TUNE_KNOB_PARAM, -1.f, 1.f, 0.f, "Fine Tune", " Semitones");
 		configParam(HARM_COUNT_KNOB_PARAM, -2.f, 2.f, -2.f, "Harmonic Count", " Partials", 2.f, 16.8, -3.2);
 		configParam(HARM_DENSITY_KNOB_PARAM, 0.f, 1.f, 0.f, "Harmonic Density");
@@ -624,7 +583,7 @@ struct Loom : Module {
 		configParam(HARM_DENSITY_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Density CV Attenuverter");
 		configParam(HARM_STRIDE_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Stride CV Attenuverter");
 		configParam(HARM_SHIFT_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Harmonic Shift CV Attenuverter");
-		configParam(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity CV Attenuverter");
+		configParam(SPECTRAL_PIVOT_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Spectral Shaping Intensity CV Attenuverter");
 		configParam(DRIVE_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Drive CV Attenuverter");
 		configParam(PM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "Phase Modulation CV Attenuverter");
 		configParam(FM_ATTENUVERTER_PARAM, -1.f, 1.f, 0.f, "FM CV Attenuverter");
@@ -634,7 +593,7 @@ struct Loom : Module {
 		getParamQuantity(HARM_DENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(HARM_STRIDE_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(HARM_SHIFT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
-		getParamQuantity(SPECTRAL_INTENSITY_ATTENUVERTER_PARAM)->randomizeEnabled = false;
+		getParamQuantity(SPECTRAL_PIVOT_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(PM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 		getParamQuantity(FM_ATTENUVERTER_PARAM)->randomizeEnabled = false;
 
@@ -644,7 +603,7 @@ struct Loom : Module {
 		configSwitch(LIN_EXP_FM_SWITCH_PARAM, 0.f, 1.f, 0.f, "FM Response", {"Lin", "Exp"});
 		configSwitch(SPECTRAL_TILT_SWITCH_PARAM, 0.f, 2.f, 0.f, "Spectral Tilt", {"Lowpass", "Bandpass", "Highpass"});
 		configSwitch(BOOST_FUNDAMENTAL_SWITCH_PARAM, 0.f, 1.f, 1.f, "Boost Fundamental", {"Off", "On"});
-		configSwitch(OUTPUT_MODE_SWITCH_PARAM, 0.f, 1.f, 1.f, "Output Mode", {"Quadrature", "Odd/Even"});
+		configSwitch(OUTPUT_MODE_SWITCH_PARAM, 0.f, 1.f, 0.f, "Output Mode", {"Quadrature", "Odd/Even"});
 
 		// Inputs
 		configInput(HARM_COUNT_CV_INPUT, "Harmonic Count CV");
@@ -660,7 +619,7 @@ struct Loom : Module {
 		configInput(HARM_SHIFT_CV_INPUT, "Harmonic Shift CV");
 
 		// Outputs
-		configOutput(SQUARE_OUTPUT, "Square");
+		configOutput(ENV_OUTPUT, "Square");
 		configOutput(FUNDAMENTAL_OUTPUT, "Fundamental (Sine)");
 		configOutput(ODD_ZERO_DEGREE_OUTPUT, "Odd / 0°");
 		configOutput(EVEN_NINETY_DEGREE_OUTPUT, "Even / 90°");
@@ -672,57 +631,48 @@ struct Loom : Module {
 	LoomAlgorithm algo{};
 	dsp::ClockDivider lightDivider;
 	dsp::ExponentialSlewLimiter pingEnvelope;
-	bool oversample{false};
-	bool doADAA{true};
-	bool doBlep{true};
+	bool lfoMode{false};
 
 	void onReset() override {
-		this->oversample = false;
-		this->doADAA = true;
-		this->doBlep = true;
+		this->algo.oversamplingEnabled = false;
+		this->algo.doADAA = true;
+		this->algo.blepLevel = 3;
 	}
 
 	json_t* dataToJson() override {
 		json_t* rootJ = json_object();
-		json_object_set_new(rootJ, "oversample", json_boolean(this->oversample));
-		json_object_set_new(rootJ, "doADAA", json_boolean(this->doADAA));
-		json_object_set_new(rootJ, "doBlep", json_boolean(this->doBlep));
+		json_object_set_new(rootJ, "oversample", json_boolean(this->algo.oversamplingEnabled));
+		json_object_set_new(rootJ, "doADAA", json_boolean(this->algo.doADAA));
+		json_object_set_new(rootJ, "blepLevel", json_integer(this->algo.blepLevel));
 		return rootJ;
 	}
 
 	void dataFromJson(json_t* rootJ) override {
 		json_t* oversampleJ = json_object_get(rootJ, "oversample");
 		if (oversampleJ) {
-			this->oversample = json_boolean_value(oversampleJ);
+			this->algo.oversamplingEnabled = json_boolean_value(oversampleJ);
 		}
 
 		json_t* doADAAJ = json_object_get(rootJ, "doADAA");
 		if (doADAAJ) {
-			this->doADAA = json_boolean_value(doADAAJ);
+			this->algo.doADAA = json_boolean_value(doADAAJ);
 		}
 
-		json_t* doBlepJ = json_object_get(rootJ, "doBlep");
-		if (doBlepJ) {
-			this->doBlep = json_boolean_value(doBlepJ);
+		json_t* blepLevelJ = json_object_get(rootJ, "blepLevel");
+		if (blepLevelJ) {
+			this->algo.blepLevel = json_integer_value(blepLevelJ);
 		}
 	}
 
 	void process(const ProcessArgs& args) override {
-		// Propagate right-click options to algorithm
-		this->algo.oversamplingEnabled = this->oversample;
-		this->algo.doADAA = this->doADAA;
-		this->algo.doBlep = this->doBlep;
-
 		// Read and set discrete parameters that aren't interpolated
-		algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
+		this->algo.continuousStrideMode = static_cast<ContinuousStrideMode>(
 			(int)params[CONTINUOUS_STRIDE_SWITCH_PARAM].getValue()
 		);
 
-		algo.lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
-		algo.expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
-		algo.boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
-		algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
-		algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
+		this->algo.boostFund = params[BOOST_FUNDAMENTAL_SWITCH_PARAM].getValue() > .5f;
+		this->algo.splitMode = params[OUTPUT_MODE_SWITCH_PARAM].getValue() > .5f;
+		this->algo.tilt = (int)params[SPECTRAL_TILT_SWITCH_PARAM].getValue();
 
 		// Get ping envelope so we have it for normalling to unpatched CV inputs
 		float pingValue = clamp(inputs[PING_INPUT].getVoltage(), 0.f, 8.f);
@@ -742,15 +692,23 @@ struct Loom : Module {
 		float stride = params[HARM_STRIDE_KNOB_PARAM].getValue();
 		stride += 0.2f * params[HARM_STRIDE_ATTENUVERTER_PARAM].getValue() * inputs[HARM_STRIDE_CV_INPUT].getNormalVoltage(env);
 
-		float fmCv = params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getNormalVoltage(env);
+		float fmCv = clamp(params[FM_ATTENUVERTER_PARAM].getValue() * inputs[FM_CV_INPUT].getNormalVoltage(env), -5.f, 5.f);
 		float coarse = params[COARSE_TUNE_KNOB_PARAM].getValue();
 		float fine = params[FINE_TUNE_KNOB_PARAM].getValue();
-		float pitchCv = inputs[PITCH_INPUT].getVoltage();
+		float pitchCv = clamp(inputs[PITCH_INPUT].getVoltage(), -2.f, 8.f);
 
-		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue();
-		pivotHarm += 0.4f * inputs[SPECTRAL_PIVOT_CV_INPUT].getVoltage();
+		// Collapse fmCv, coarse, fine, pitchCv into two values, expCv and linCv
+		this->lfoMode = params[RANGE_SWITCH_PARAM].getValue() < .5f;
+		this->algo.freqMultiplier = this->lfoMode ? LFO_MULTIPLIER : VCO_MULTIPLIER;
+		bool expFm = params[LIN_EXP_FM_SWITCH_PARAM].getValue() > .5f;
+		fine *= lfoMode ? 1.f : VCO_FINE_TUNE_OCTAVES;
+		float expCv = coarse + fine + pitchCv + (expFm ? fmCv : 0.f);
+		float linCv = expFm ? 0.f : fmCv * LIN_FM_FACTOR;
 
-		float intensityCv = params[SPECTRAL_INTENSITY_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getNormalVoltage(env);
+		float pivotCv = params[SPECTRAL_PIVOT_ATTENUVERTER_PARAM].getValue() * .2f * inputs[SPECTRAL_PIVOT_CV_INPUT].getNormalVoltage(env);
+		float pivotHarm = params[SPECTRAL_PIVOT_KNOB_PARAM].getValue() + pivotCv;
+
+		float intensityCv = .2f * inputs[SPECTRAL_INTENSITY_CV_INPUT].getVoltage();
 		float intensity = params[SPECTRAL_INTENSITY_KNOB_PARAM].getValue() + intensityCv;
 
 		float driveCv = params[DRIVE_ATTENUVERTER_PARAM].getValue() * .2f * inputs[DRIVE_CV_INPUT].getNormalVoltage(env);
@@ -760,18 +718,18 @@ struct Loom : Module {
 		float sinPhaseOffset = params[PM_ATTENUVERTER_PARAM].getValue() * .2f * inputs[PM_CV_INPUT].getNormalVoltage(env);
 
 		// Pack algorithm inputs
-		std::array<float_4, 4> algoInputs;
-		algoInputs[0] = {length, density, shift, stride}; // Structure section
-		algoInputs[1] = {fmCv, coarse, fine, pitchCv}; // Pitch influences
-		algoInputs[2] = {pivotHarm, intensity, drive, 0}; // Shaping section
-		algoInputs[3] = {syncValue, sinPhaseOffset, 0, 0}; // Misc CV
+		std::array<float_4, 3> algoInputs;
+		algoInputs[0] = {length, density, shift, stride};          // Structure section
+		algoInputs[1] = {expCv, linCv, sinPhaseOffset, syncValue}; // Pitch/phase influences
+		algoInputs[2] = {pivotHarm, intensity, drive, 0.f};        // Shaping section
 
-		// Do stuff
-		auto outsPacked = this->algo.process(args, algoInputs)[0];
+		// Run algorithm and output the results
+		float outsPacked[4];
+		this->algo.process(args, algoInputs)[0].store(outsPacked);
 		outputs[ODD_ZERO_DEGREE_OUTPUT].setVoltage(outsPacked[0]);
 		outputs[EVEN_NINETY_DEGREE_OUTPUT].setVoltage(outsPacked[1]);
 		outputs[FUNDAMENTAL_OUTPUT].setVoltage(outsPacked[2]);
-		outputs[SQUARE_OUTPUT].setVoltage(outsPacked[3]);
+		outputs[ENV_OUTPUT].setVoltage(env);
 
 		if (lightDivider.process()) {
 			float lightTime = args.sampleTime * lightDivider.getDivision();
@@ -808,17 +766,17 @@ struct LoomWidget : ModuleWidget {
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 45.34)), module, Loom::HARM_DENSITY_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 62.86)), module, Loom::HARM_SHIFT_KNOB_PARAM));
 		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(81.935, 81.46)), module, Loom::HARM_STRIDE_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 61.879)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 81.428)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
-		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.881, 61.603)), module, Loom::DRIVE_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 82.005)), module, Loom::SPECTRAL_PIVOT_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(10.375, 60.544)), module, Loom::SPECTRAL_INTENSITY_KNOB_PARAM));
+		addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(39.881, 60.544)), module, Loom::DRIVE_KNOB_PARAM));
 
 		// Trimpots
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(56.382, 19.028)), module, Loom::HARM_COUNT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 41.959)), module, Loom::HARM_DENSITY_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 57.502)), module, Loom::HARM_SHIFT_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(67.491, 73.843)), module, Loom::HARM_STRIDE_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 82.006)), module, Loom::SPECTRAL_INTENSITY_ATTENUVERTER_PARAM));
-		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 61.698)), module, Loom::DRIVE_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 82.006)), module, Loom::SPECTRAL_PIVOT_ATTENUVERTER_PARAM));
+		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.003, 60.640)), module, Loom::DRIVE_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(26.073, 41.867)), module, Loom::PM_ATTENUVERTER_PARAM));
 		addParam(createParamCentered<Trimpot>(mm2px(Vec(39.881, 41.867)), module, Loom::FM_ATTENUVERTER_PARAM));
 
@@ -849,7 +807,7 @@ struct LoomWidget : ModuleWidget {
 		// Outputs
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 99.133)), module, Loom::FUNDAMENTAL_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(83.855, 99.133)), module, Loom::ODD_ZERO_DEGREE_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 111.249)), module, Loom::SQUARE_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.976, 111.249)), module, Loom::ENV_OUTPUT));
 		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(83.855, 111.249)), module, Loom::EVEN_NINETY_DEGREE_OUTPUT));
 
 		// Multi-colored LEDs
@@ -857,14 +815,14 @@ struct LoomWidget : ModuleWidget {
 
 		// Single color LEDs
 		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(75.410, 74.791)), module, Loom::STRIDE_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(4.233, 73.4)), module, Loom::S_LED_1_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(8.313, 73.4)), module, Loom::S_LED_2_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.393, 73.4)), module, Loom::S_LED_3_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.473, 73.4)), module, Loom::S_LED_4_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.553, 73.4)), module, Loom::S_LED_5_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 73.4)), module, Loom::S_LED_6_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 73.4)), module, Loom::S_LED_7_LIGHT));
-		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 73.4)), module, Loom::S_LED_8_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(4.233, 72.871)), module, Loom::S_LED_1_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(8.313, 72.871)), module, Loom::S_LED_2_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(12.393, 72.871)), module, Loom::S_LED_3_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(16.473, 72.871)), module, Loom::S_LED_4_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(20.553, 72.871)), module, Loom::S_LED_5_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(24.633, 72.871)), module, Loom::S_LED_6_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(28.713, 72.871)), module, Loom::S_LED_7_LIGHT));
+		addChild(createLightCentered<SmallSimpleLight<BlueLight>>(mm2px(Vec(32.793, 72.871)), module, Loom::S_LED_8_LIGHT));
 	}
 
 	void appendContextMenu(Menu* menu) override {
@@ -877,19 +835,19 @@ struct LoomWidget : ModuleWidget {
 			Loom* module;
 			bool oversample;
 			void onAction(const event::Action& e) override {
-				module->oversample = oversample;
+				module->algo.oversamplingEnabled = oversample;
 			}
 		};
 
 		{
 			OversampleItem* offItem = createMenuItem<OversampleItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->oversample));
+			offItem->rightText = CHECKMARK(!(module->algo.oversamplingEnabled));
 			offItem->module = module;
 			offItem->oversample = false;
 			menu->addChild(offItem);
 
 			OversampleItem* onItem = createMenuItem<OversampleItem>("2x");
-			onItem->rightText = CHECKMARK(module->oversample);
+			onItem->rightText = CHECKMARK(module->algo.oversamplingEnabled);
 			onItem->module = module;
 			onItem->oversample = true;
 			menu->addChild(onItem);
@@ -902,47 +860,65 @@ struct LoomWidget : ModuleWidget {
 			Loom* module;
 			bool doADAA;
 			void onAction(const event::Action& e) override {
-				module->doADAA = doADAA;
+				module->algo.doADAA = doADAA;
 			}
 		};
 
 		{
 			ADAAItem* offItem = createMenuItem<ADAAItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->doADAA));
+			offItem->rightText = CHECKMARK(!(module->algo.doADAA));
 			offItem->module = module;
 			offItem->doADAA = false;
 			menu->addChild(offItem);
 
 			ADAAItem* onItem = createMenuItem<ADAAItem>("On");
-			onItem->rightText = CHECKMARK(module->doADAA);
+			onItem->rightText = CHECKMARK(module->algo.doADAA);
 			onItem->module = module;
 			onItem->doADAA = true;
 			menu->addChild(onItem);
 		}
 
 		menu->addChild(new MenuEntry);
-		menu->addChild(createMenuLabel("MinBLEP Anti-Aliasing"));
+		menu->addChild(createMenuLabel("BLEP Anti-Aliasing"));
 
 		struct BlepItem : MenuItem {
 			Loom* module;
-			bool doBlep;
+			int blepLevel;
 			void onAction(const event::Action& e) override {
-				module->doBlep = doBlep;
+				module->algo.blepLevel = blepLevel;
 			}
 		};
 
 		{
 			BlepItem* offItem = createMenuItem<BlepItem>("Off");
-			offItem->rightText = CHECKMARK(!(module->doBlep));
+			offItem->rightText = CHECKMARK(!(module->algo.blepLevel));
 			offItem->module = module;
-			offItem->doBlep = false;
+			offItem->blepLevel = 0;
 			menu->addChild(offItem);
 
-			BlepItem* onItem = createMenuItem<BlepItem>("On");
-			onItem->rightText = CHECKMARK(module->doBlep);
-			onItem->module = module;
-			onItem->doBlep = true;
-			menu->addChild(onItem);
+			BlepItem* onItem1 = createMenuItem<BlepItem>("0th Order");
+			onItem1->rightText = CHECKMARK(module->algo.blepLevel == 1);
+			onItem1->module = module;
+			onItem1->blepLevel = 1;
+			menu->addChild(onItem1);
+
+			BlepItem* onItem2 = createMenuItem<BlepItem>("1st Order");
+			onItem2->rightText = CHECKMARK(module->algo.blepLevel == 2);
+			onItem2->module = module;
+			onItem2->blepLevel = 2;
+			menu->addChild(onItem2);
+
+			BlepItem* onItem3 = createMenuItem<BlepItem>("2nd Order");
+			onItem3->rightText = CHECKMARK(module->algo.blepLevel == 3);
+			onItem3->module = module;
+			onItem3->blepLevel = 3;
+			menu->addChild(onItem3);
+
+			BlepItem* onItem4 = createMenuItem<BlepItem>("3rd Order");
+			onItem4->rightText = CHECKMARK(module->algo.blepLevel == 4);
+			onItem4->module = module;
+			onItem4->blepLevel = 4;
+			menu->addChild(onItem4);
 		}
 	}
 };
