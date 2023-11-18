@@ -1,6 +1,7 @@
 #include "rack.hpp"
 
 #include <algorithm>
+#include <array>
 
 using namespace rack;
 

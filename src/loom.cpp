@@ -3,10 +3,10 @@
 #include "math/Utility.hpp"
 #include "dsp/HighOrderLinearBlep.hpp"
 #include "dsp/OversampledAlgorithm.hpp"
-#include "dsp/PolyBlep.hpp"
 #include "dsp/WaveshapingADAA1.hpp"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <utility>
