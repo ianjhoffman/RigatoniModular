@@ -1,7 +1,7 @@
 #pragma once
 
 #include <array>
-#include <utility>
+#include <cstdint>
 
 struct EuclideanPatternGenerator {
     // All Euclidean pattern bitmasks for each length up to 64; inner index is density
